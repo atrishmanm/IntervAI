@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Interview Prep</title>
+  <meta name="description" content="Strict, analytical technical interview practice." />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* ChatGPT-style Grayscale Theme */
+      --bg:         #212121;
+      --surface:    #2f2f2f;
+      --surface2:   #3a3a3a;
+      --border:     #424242;
+      
+      --accent:     #ececec; /* Soft white */
+      
+      /* Semantic colors (muted for dark theme) */
+      --green:      #4ade80;
+      --green-bg:   rgba(74, 222, 128, 0.1);
+      --amber:      #facc15;
+      --amber-bg:   rgba(250, 204, 21, 0.1);
+      --red:        #f87171;
+      --red-bg:     rgba(248, 113, 113, 0.1);
+      
+      --text:       #ececec;
+      --text-muted: #a3a3a3;
+      
+      --font:       'Inter', system-ui, sans-serif;
+      --mono:       'JetBrains Mono', monospace;
+      --radius:     8px;
+      --transition: 0.15s ease;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15px; line-height: 1.6; }
+
+    #app { display: flex; flex-direction: column; height: 100vh; max-width: 850px; margin: 0 auto; }
+
+    /* Header */
+    header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg); flex-shrink: 0; }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .logo { width: 32px; height: 32px; background: var(--text); color: var(--bg); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; }
+    h1 { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+    
+    #status-badge { font-size: 0.72rem; padding: 4px 10px; border-radius: 4px; font-weight: 600; text-transform: uppercase; border: 1px solid var(--border); }
+    .badge-ready   { color: var(--green); border-color: var(--green); background: var(--green-bg); }
+    .badge-offline { color: var(--text-muted); }
+
+    /* Stats bar */
+    #stats-bar { display: flex; gap: 24px; padding: 12px 24px; background: var(--bg); border-bottom: 1px solid var(--border); font-size: 0.85rem; color: var(--text-muted); flex-shrink: 0; }
+    .stat { display: flex; align-items: center; gap: 6px; }
+    .stat-val { color: var(--text); font-weight: 600; }
+
+    /* Setup panel */
+    #setup-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .setup-card { background: var(--bg); padding: 40px; width: 100%; max-width: 500px; text-align: left; }
+    .setup-card h2 { font-size: 1.6rem; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+    .setup-card p { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 32px; line-height: 1.7; }
+    
+    .feature-list { margin-bottom: 32px; border-left: 2px solid var(--border); padding-left: 20px; }
+    .feature-list li { list-style: none; padding: 8px 0; font-size: 0.9rem; color: var(--text); display: flex; flex-direction: column; }
+    .feature-list li span { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; }
+
+    /* Buttons */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; font-weight: 500; font-family: var(--font); cursor: pointer; transition: all var(--transition); background: var(--surface); color: var(--text); }
+    .btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); width: 100%; font-weight: 600; }
+    .btn-primary:hover { background: #d4d4d4; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-ghost { background: transparent; }
+    .btn-ghost:hover { background: var(--surface); }
+
+    /* Chat area */
+    #chat-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #messages { flex: 1; overflow-y: auto; padding: 24px 24px 40px 24px; display: flex; flex-direction: column; gap: 32px; scroll-behavior: smooth; }
+
+    /* Question bubble (AI) */
+    .msg-card { display: flex; flex-direction: column; gap: 8px; animation: fadeUp 0.2s ease; max-width: 100%; }
+    .msg-header { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+    .msg-icon { width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+    .ai-icon { background: var(--text); color: var(--bg); font-weight: bold; }
+    .user-icon { background: var(--surface2); color: var(--text); }
+    
+    .q-meta { font-size: 0.75rem; font-weight: normal; color: var(--text-muted); background: var(--surface); padding: 2px 8px; border-radius: 4px; }
+    
+    .msg-text { font-size: 0.95rem; line-height: 1.7; white-space: pre-wrap; color: var(--text); }
+    .msg-text code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.85rem; color: #d4d4d4; }
+    .msg-text pre { background: #000; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin: 12px 0; font-family: var(--mono); font-size: 0.85rem; overflow-x: auto; line-height: 1.5; color: #e5e5e5; }
+
+    /* User bubble */
+    .user-bubble { background: var(--surface); padding: 16px 20px; border-radius: var(--radius); align-self: flex-end; max-width: 85%; }
+    .user-bubble .msg-text { color: var(--text); }
+
+    /* Report Card */
+    .report-card { background: transparent; border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-top: 8px; }
+    .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .report-title { font-size: 0.9rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
+    .report-title::before { content: ''; display: inline-block; width: 4px; height: 16px; background: var(--text-muted); border-radius: 2px; }
+    
+    .report-score { font-size: 1.4rem; font-weight: 700; display: flex; align-items: baseline; gap: 6px; }
+    .report-score span { font-size: 0.8rem; font-weight: 400; color: var(--text-muted); }
+    .score-correct { color: var(--green); }
+    .score-partial { color: var(--amber); }
+    .score-incorrect { color: var(--red); }
+
+    .check-list { list-style: none; margin-bottom: 24px; display: grid; gap: 12px; }
+    .check-item { display: flex; align-items: flex-start; gap: 12px; font-size: 0.9rem; line-height: 1.5; }
+    .check-icon { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; margin-top: 2px; font-weight: bold; }
+    .check-pass    .check-icon { color: var(--green); background: var(--green-bg); }
+    .check-partial .check-icon { color: var(--amber); background: var(--amber-bg); }
+    .check-fail    .check-icon { color: var(--red); background: var(--red-bg); }
+    .check-content { display: flex; flex-direction: column; }
+    .check-label { font-weight: 500; color: var(--text); }
+    .check-detail { color: var(--text-muted); font-size: 0.85rem; }
+
+    .ref-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
+    .ref-title { font-size: 0.8rem; font-weight: 600; color: var(--text); margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+    .ref-text { font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; white-space: pre-wrap; }
+
+    .followup { font-size: 0.95rem; color: var(--text); font-weight: 500; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Typing indicator */
+    .typing-indicator { display: flex; align-items: center; gap: 4px; padding: 8px 0; }
+    .dot { width: 6px; height: 6px; background: var(--text-muted); border-radius: 50%; animation: bounce 1.2s infinite; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
+
+    /* Input area */
+    #input-area { padding: 20px 24px; background: var(--bg); flex-shrink: 0; }
+    .input-wrapper { display: flex; gap: 12px; align-items: flex-end; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; transition: border-color var(--transition); }
+    .input-wrapper:focus-within { border-color: #666; }
+    
+    #answer-input { flex: 1; min-height: 44px; max-height: 200px; padding: 10px 12px; background: transparent; border: none; color: var(--text); font-size: 0.95rem; font-family: var(--font); line-height: 1.5; resize: none; outline: none; }
+    #answer-input::placeholder { color: #666; }
+    
+    .input-actions { display: flex; gap: 8px; padding-bottom: 4px; padding-right: 4px; }
+    .icon-btn { width: 36px; height: 36px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: all 0.2s; }
+    .icon-btn:hover { background: var(--surface2); color: var(--text); }
+    #send-btn { background: var(--text); color: var(--bg); }
+    #send-btn:hover { background: #d4d4d4; }
+    
+    #mic-btn.listening { color: var(--red); background: var(--red-bg); animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    
+    #hint-text { font-size: 0.75rem; color: #666; margin-top: 8px; text-align: center; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #555; }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <div class="header-left">
+      <div class="logo">AI</div>
+      <h1>Interview Prep</h1>
+    </div>
+    <span id="status-badge" class="badge-offline">Checking...</span>
+  </header>
+
+  <div id="stats-bar" style="display:none;">
+    <div class="stat">Questions: <span id="stat-q" class="stat-val">0</span> / 10</div>
+    <div class="stat">Average Score: <span id="stat-score" class="stat-val">-</span></div>
+  </div>
+
+  <div id="setup-panel">
+    <div class="setup-card">
+      <h2>Technical Interview</h2>
+      <p>A rigorous, highly analytical interview environment trained on 100,000 real coding interviews. Focus on algorithmic patterns, complexity, and constraints.</p>
+      <ul class="feature-list">
+        <li><strong>5-Factor Evaluation</strong> <span>Analyzes Algorithm, Time, Space, Edge Cases, and Depth.</span></li>
+        <li><strong>Factual References</strong> <span>Matches your answer against real expert transcripts.</span></li>
+        <li><strong>Strict Scoring</strong> <span>No fluff. Just structured analysis of your technical communication.</span></li>
+      </ul>
+      <button id="start-btn" class="btn btn-primary" onclick="startSession()">Start Session</button>
+    </div>
+  </div>
+
+  <div id="chat-panel" style="display:none; flex-direction:column;">
+    <div id="messages"></div>
+    <div id="input-area">
+      <div class="input-wrapper">
+        <textarea id="answer-input" placeholder="Message Interviewer..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <div class="input-actions">
+          <button id="mic-btn" class="icon-btn" onclick="toggleRecording()" title="Voice Input">&#127908;</button>
+          <button id="send-btn" class="icon-btn" onclick="sendAnswer()" title="Send">&#8593;</button>
+        </div>
+      </div>
+      <div id="hint-text">Ctrl + Enter to send</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API = 'http://localhost:8000';
+  let sessionId = null;
+  let isWaiting = false;
+  let questionsAsked = 0;
+  let totalScore = 0;
+
+  window.addEventListener('DOMContentLoaded', checkStatus);
+
+  async function checkStatus() {
+    const badge = document.getElementById('status-badge');
+    try {
+      const res = await fetch(`${API}/api/status`);
+      const data = await res.json();
+      if (data.ready) {
+        badge.textContent = 'System Ready';
+        badge.className = 'badge-ready';
+      } else {
+        badge.textContent = 'Not Trained';
+        badge.className = 'badge-offline';
+      }
+    } catch {
+      badge.textContent = 'Offline';
+      badge.className = 'badge-offline';
+    }
+  }
+
+  async function startSession() {
+    const btn = document.getElementById('start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Initializing...';
+
+    try {
+      const res = await fetch(`${API}/api/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+
+      if (!res.ok) { alert('Failed to start session.'); return; }
+      const data = await res.json();
+      sessionId = data.session_id;
+
+      document.getElementById('setup-panel').style.display = 'none';
+      document.getElementById('chat-panel').style.display = 'flex';
+      document.getElementById('stats-bar').style.display = 'flex';
+
+      questionsAsked = 1;
+      updateStats();
+      renderQuestion(data);
+      document.getElementById('answer-input').focus();
+    } catch (e) {
+      alert('Could not connect to backend.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Start Session';
+    }
+  }
+
+  async function sendAnswer() {
+    if (isWaiting || !sessionId) return;
+    const input = document.getElementById('answer-input');
+    const answer = input.value.trim();
+    if (!answer) return;
+
+    input.value = '';
+    autoResize(input);
+    isWaiting = true;
+
+    renderUserAnswer(answer);
+    const typingEl = renderTyping();
+
+    try {
+      const res = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, answer }),
+      });
+
+      typingEl.remove();
+      if (!res.ok) { const err = await res.json(); renderError(err.detail); return; }
+
+      const data = await res.json();
+      questionsAsked = data.questions_asked || questionsAsked;
+
+      if (data.type === 'analysis_and_next') {
+        totalScore += data.report.score;
+        updateStats();
+        renderReport(data.report);
+        renderQuestion(data.next_question);
+        speakText(data.next_question.question_text);
+      } else if (data.type === 'session_complete') {
+        totalScore += data.report.score;
+        updateStats();
+        renderReport(data.report);
+        renderSessionSummary(data.summary);
+        showSessionOver();
+      }
+    } catch (e) {
+      typingEl.remove();
+      renderError('Connection error.');
+    } finally {
+      isWaiting = false;
+    }
+  }
+
+  function updateStats() {
+    document.getElementById('stat-q').textContent = questionsAsked;
+    const avg = questionsAsked > 0 ? Math.round(totalScore / questionsAsked) : '-';
+    document.getElementById('stat-score').textContent = avg === '-' ? '-' : avg;
+  }
+
+  // ── Rendering ─────────────────────────────────────────────
+  function renderQuestion(q) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'msg-card';
+
+    const typeLabel = {
+      'theoretical': 'Theoretical',
+      'output_prediction': 'Code Analysis',
+      'concept': 'Concept',
+    }[q.question_type] || q.question_type;
+
+    let qText = escapeHtml(q.question_text);
+    qText = qText.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre>${code}</pre>`);
+    qText = qText.replace(/`([^`]+)`/g, '<code>$1</code>');
+    qText = qText.replace(/\n/g, '<br>');
+
+    div.innerHTML = `
+      <div class="msg-header">
+        <div class="msg-icon ai-icon">AI</div>
+        <span>Interviewer</span>
+        <span class="q-meta">${typeLabel} &middot; ${q.topic}</span>
+      </div>
+      <div class="msg-text">${qText}</div>
+    `;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function renderUserAnswer(text) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'msg-card user-bubble';
+    div.innerHTML = `
+      <div class="msg-text">${escapeHtml(text)}</div>
+    `;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function renderReport(report) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'report-card';
+
+    const scoreClass = report.score >= 80 ? 'score-correct' : report.score >= 50 ? 'score-partial' : 'score-incorrect';
+
+    let checksHtml = '';
+    for (const c of report.checks) {
+      const icon = c.status === 'pass' ? '&#10003;' : c.status === 'partial' ? '!' : '&#10007;';
+      checksHtml += `
+        <li class="check-item check-${c.status}">
+          <span class="check-icon">${icon}</span>
+          <div class="check-content">
+            <span class="check-label">${c.label}</span>
+            <span class="check-detail">${c.detail}</span>
+          </div>
+        </li>
+      `;
+    }
+
+    let refHtml = '';
+    if (report.expert_reference) {
+      let refText = escapeHtml(report.expert_reference);
+      refText = refText.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre>${code}</pre>`);
+      refHtml = `
+        <div class="ref-section">
+          <div class="ref-title">&#128196; Expert Reference</div>
+          <div class="ref-text">${refText}</div>
+        </div>
+      `;
+    }
+
+    div.innerHTML = `
+      <div class="report-header">
+        <div class="report-title">Analysis Report</div>
+        <div class="report-score ${scoreClass}">${report.score} <span>/ 100</span></div>
+      </div>
+      <ul class="check-list">${checksHtml}</ul>
+      ${refHtml}
+      <div class="followup">${report.follow_up}</div>
+    `;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function renderSessionSummary(summary) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.style.cssText = 'background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:24px; text-align:center; margin-top:20px;';
+    div.innerHTML = `
+      <h3 style="font-size:1.2rem; margin-bottom:8px;">Interview Complete</h3>
+      <p style="color:var(--text-muted);">Questions Answered: ${summary.total_questions}</p>
+      <div style="font-size:2rem; font-weight:700; margin:16px 0;">${summary.average_score} / 100</div>
+      <p style="font-weight:500;">${summary.verdict}</p>
+    `;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function renderTyping() {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'msg-card';
+    div.innerHTML = `
+      <div class="msg-header">
+        <div class="msg-icon ai-icon">AI</div>
+        <span>Interviewer</span>
+      </div>
+      <div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+    `;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return div;
+  }
+
+  function renderError(msg) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.style.cssText = 'color:var(--red); padding:12px; font-size:0.9rem; background:var(--red-bg); border-radius:6px;';
+    div.textContent = msg;
+    msgs.appendChild(div);
+  }
+
+  function showSessionOver() {
+    document.getElementById('input-area').innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:center; padding:16px;">
+        <button class="btn btn-ghost" onclick="location.reload()">Start New Session</button>
+      </div>
+    `;
+  }
+
+  function escapeHtml(t) {
+    if (!t) return '';
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Voice ─────────────────────────────────────────────────
+  let recognition = null;
+  let isRecording = false;
+
+  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+    recognition.onstart = () => { isRecording = true; document.getElementById('mic-btn').classList.add('listening'); document.getElementById('answer-input').placeholder = 'Listening...'; };
+    recognition.onresult = (e) => { const t = e.results[0][0].transcript; const inp = document.getElementById('answer-input'); inp.value += (inp.value ? ' ' : '') + t; autoResize(inp); };
+    recognition.onerror = () => stopRecording();
+    recognition.onend = () => stopRecording();
+  }
+
+  function toggleRecording() {
+    if (!recognition) { alert('Speech Recognition not supported.'); return; }
+    isRecording ? recognition.stop() : recognition.start();
+  }
+  function stopRecording() {
+    isRecording = false;
+    document.getElementById('mic-btn').classList.remove('listening');
+    document.getElementById('answer-input').placeholder = 'Message Interviewer...';
+  }
+
+  function speakText(text) {
+    if (!('speechSynthesis' in window)) return;
+    const clean = text.replace(/[*#`]/g, '').replace(/<[^>]*>/g, '').replace(/```[\s\S]*?```/g, 'code snippet.');
+    const u = new SpeechSynthesisUtterance(clean);
+    u.rate = 1.0;
+    const voices = window.speechSynthesis.getVoices();
+    const v = voices.find(v => v.name.includes('Google') || v.name.includes('Natural')) || voices[0];
+    if (v) u.voice = v;
+    window.speechSynthesis.speak(u);
+  }
+
+  // ── UX ────────────────────────────────────────────────────
+  function handleKey(e) { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); sendAnswer(); } }
+  function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }
+</script>
+</body>
+</html>
