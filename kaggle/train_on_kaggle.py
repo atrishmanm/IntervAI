@@ -1,24 +1,33 @@
 """
 kaggle/train_on_kaggle.py
 ==========================
-Run INTERVUE training on Kaggle (T4/P100 16GB).
+Run INTERVUE training on Kaggle (T4/P100 16GB) — fully automatic.
 
-Copy this file into a Kaggle Notebook cell, or run:
-    !python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all
+What it does:
+  1. Clones the IntervAI repo (if not present)
+  2. Finds your `intervai-data` dataset in /kaggle/input and copies it
+     into the repo's data/raw/ folder (the trainer + tokenizer read from there)
+  3. Installs dependencies
+  4. Retrains the tokenizer (it is NOT in the repo — it's gitignored)
+  5. Runs all 6 curriculum stages with checkpoints
 
 REQUIRED SETUP ON KAGGLE (before running):
   1. New Notebook → Settings → Accelerator = GPU T4 x2 (or P100)
-  2. Add Data → your `intervai-data` Kaggle dataset (upload data/raw/*.jsonl)
-     It mounts at /kaggle/input/intervai-data/<files>
-  3. (Optional) Upload the pretrained tokenizer if you trained it locally:
-     tokenizer/saved/tokenizer.json
+  2. Add Data → your `intervai-data` dataset
+     (must contain: starcoder_large.jsonl, opencodeinstruct.jsonl,
+      conversations.jsonl, codesearchnet.jsonl, codefeedback.jsonl,
+      oasst_coding.jsonl, codealpaca.jsonl, mohler_asag.jsonl,
+      mmlu_cs.json, cruxeval/cruxeval.jsonl)
+  3. Run this cell (paste the whole file, or run the line below):
 
-The unified trainer (models/generator/train.py) auto-detects Kaggle and uses
-batch=16, accum=4, medium model, FP16. Checkpoints land in
-/kaggle/working/IntervAI/models/generator/saved/ — download them at the end.
+     !python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all
+
+Checkpoints land in /kaggle/working/IntervAI/models/generator/saved/.
+Download them when done. Re-run the same cell to resume after a timeout.
 """
 
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -28,7 +37,7 @@ WORK = Path("/kaggle/working")
 REPO = WORK / "IntervAI"
 if not REPO.exists():
     print("Cloning IntervAI repo...")
-    os.system("git clone https://github.com/<YOUR_USER>/IntervAI.git /kaggle/working/IntervAI")
+    os.system("git clone https://github.com/atrishmanm/IntervAI.git /kaggle/working/IntervAI")
 
 sys.path.insert(0, str(REPO))
 os.chdir(REPO)
@@ -44,13 +53,73 @@ def _pip(*pkgs):
 
 _pip("torch", "tokenizers", "numpy", "scikit-learn", "tqdm", "safetensors")
 
-# ── 3. Train tokenizer on Kaggle input (if not already saved) ─
+# ── 3. Copy your dataset into data/raw ────────────────────────
+RAW_DIR = REPO / "data" / "raw"
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+def copy_dataset_into_raw():
+    """Find the intervai-data dataset in /kaggle/input and copy into data/raw."""
+    print("\nLocating dataset in /kaggle/input...")
+    input_dir = Path("/kaggle/input")
+    if not input_dir.exists():
+        raise RuntimeError("/kaggle/input not found — did you add your dataset to the notebook?")
+
+    # Find the dataset dir (intervai-data, or whichever has our files)
+    dataset_dirs = []
+    for d in input_dir.iterdir():
+        if not d.is_dir():
+            continue
+        names = {p.name for p in d.rglob("*") if p.is_file()}
+        if {"starcoder_large.jsonl", "conversations.jsonl"} & names:
+            dataset_dirs.append(d)
+    if not dataset_dirs:
+        print("  WARNING: no dataset with expected files found in /kaggle/input:")
+        for d in input_dir.iterdir():
+            print(f"    - {d.name}")
+        print("  Skipping copy. Training will skip missing files.")
+        return
+
+    src = dataset_dirs[0]
+    print(f"  Found dataset: {src}")
+
+    # Copy everything (files + subdirs like cruxeval/)
+    copied = 0
+    for item in src.rglob("*"):
+        rel = item.relative_to(src)
+        dest = RAW_DIR / rel
+        if item.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                shutil.copy2(item, dest)
+                copied += 1
+    print(f"  Copied {copied} files into {RAW_DIR}")
+
+    # Sanity check: report sizes
+    for name in ["starcoder_large.jsonl", "opencodeinstruct.jsonl", "conversations.jsonl",
+                 "codesearchnet.jsonl", "codefeedback.jsonl", "oasst_coding.jsonl",
+                 "codealpaca.jsonl", "mohler_asag.jsonl", "mmlu_cs.json"]:
+        p = RAW_DIR / name
+        if p.exists():
+            print(f"    OK  {name} ({p.stat().st_size/1e6:.1f} MB)")
+        else:
+            print(f"    !!  {name} MISSING")
+
+copy_dataset_into_raw()
+
+# ── 4. Train tokenizer (not in repo — gitignored) ─────────────
 tok_path = REPO / "tokenizer" / "saved" / "tokenizer.json"
 if not tok_path.exists():
-    print("\nTraining tokenizer on Kaggle data...")
-    os.system(f"{sys.executable} tokenizer/train_tokenizer.py")
+    print("\nTraining tokenizer on Kaggle data (16K vocab)...")
+    rc = os.system(f"{sys.executable} tokenizer/train_tokenizer.py")
+    if rc != 0:
+        print("!! Tokenizer training failed — stopping.")
+        sys.exit(rc)
+else:
+    print("\nTokenizer already present, skipping training.")
 
-# ── 4. Run training ───────────────────────────────────────────
+# ── 5. Run training ───────────────────────────────────────────
 STAGES = ["pretrain", "domain", "instruction", "interview", "evaluator", "followup"]
 stage = sys.argv[sys.argv.index("--stage") + 1] if "--stage" in sys.argv else "all"
 if stage != "all":
