@@ -295,6 +295,9 @@
         totalScore += data.report.score;
         updateStats();
         renderReport(data.report);
+        if (data.panel_report && !data.panel_report.error) {
+          renderPanelReport(data.panel_report);
+        }
         renderSessionSummary(data.summary);
         showSessionOver();
       }
@@ -359,31 +362,47 @@
 
     const scoreClass = report.score >= 80 ? 'score-correct' : report.score >= 50 ? 'score-partial' : 'score-incorrect';
 
+    // New contextual report format (concepts / feedback / suggested_followup)
     let checksHtml = '';
-    for (const c of report.checks) {
-      const icon = c.status === 'pass' ? '&#10003;' : c.status === 'partial' ? '!' : '&#10007;';
+    const concepts = report.concepts || [];
+
+    if (concepts.length > 0) {
+      for (const c of concepts) {
+        const status = c.status === 'pass' ? 'pass' : c.status === 'partial' ? 'partial' : 'fail';
+        const icon = status === 'pass' ? '&#10003;' : status === 'partial' ? '!' : '&#10007;';
+        checksHtml += `
+          <li class="check-item check-${status}">
+            <span class="check-icon">${icon}</span>
+            <div class="check-content">
+              <span class="check-label">${escapeHtml(c.name)}</span>
+              <span class="check-detail">${escapeHtml(c.detail || '')}</span>
+            </div>
+          </li>
+        `;
+      }
+    }
+
+    // Accuracy / completeness / quality summaries
+    const extra = [];
+    if (report.accuracy) extra.push(['Accuracy', report.accuracy.status]);
+    if (report.completeness) extra.push(['Completeness', report.completeness.status]);
+    if (report.quality) extra.push(['Depth & Clarity', report.quality.status]);
+    for (const [label, status] of extra) {
+      const s = status === 'pass' ? 'pass' : status === 'partial' ? 'partial' : 'fail';
+      const icon = s === 'pass' ? '&#10003;' : s === 'partial' ? '!' : '&#10007;';
       checksHtml += `
-        <li class="check-item check-${c.status}">
+        <li class="check-item check-${s}">
           <span class="check-icon">${icon}</span>
           <div class="check-content">
-            <span class="check-label">${c.label}</span>
-            <span class="check-detail">${c.detail}</span>
+            <span class="check-label">${label}</span>
+            <span class="check-detail"></span>
           </div>
         </li>
       `;
     }
 
-    let refHtml = '';
-    if (report.expert_reference) {
-      let refText = escapeHtml(report.expert_reference);
-      refText = refText.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre>${code}</pre>`);
-      refHtml = `
-        <div class="ref-section">
-          <div class="ref-title">&#128196; Expert Reference</div>
-          <div class="ref-text">${refText}</div>
-        </div>
-      `;
-    }
+    const feedbackText = report.feedback || report.overall_feedback || '';
+    const followupText = report.suggested_followup || report.follow_up || '';
 
     div.innerHTML = `
       <div class="report-header">
@@ -391,8 +410,66 @@
         <div class="report-score ${scoreClass}">${report.score} <span>/ 100</span></div>
       </div>
       <ul class="check-list">${checksHtml}</ul>
-      ${refHtml}
-      <div class="followup">${report.follow_up}</div>
+      ${feedbackText ? `<div class="followup" style="border:none; padding-top:0;">${escapeHtml(feedbackText)}</div>` : ''}
+      ${followupText ? `<div class="followup">${escapeHtml(followupText)}</div>` : ''}
+    `;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function renderPanelReport(panel) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'report-card';
+
+    const o = panel.overall || {};
+    const concepts = panel.concepts || [];
+    const weaknesses = panel.weaknesses || [];
+    const suggestions = panel.suggestions || [];
+
+    const levelColor = {
+      'Mastered': 'var(--green)',
+      'Developing': 'var(--amber)',
+      'Beginner': 'var(--red)',
+      'Not Started': 'var(--text-muted)',
+    };
+
+    let conceptsHtml = concepts.map(c => `
+      <li class="check-item">
+        <span class="check-icon" style="background:transparent; color:${levelColor[c.level] || 'var(--text-muted)'}; font-size:10px;">${c.level === 'Mastered' ? '&#10003;' : c.level === 'Developing' ? '!' : c.level === 'Beginner' ? '&#10007;' : '-'}</span>
+        <div class="check-content">
+          <span class="check-label">${escapeHtml(c.concept)}</span>
+          <span class="check-detail">${escapeHtml(c.detail)}</span>
+        </div>
+      </li>
+    `).join('');
+
+    let weakHtml = '';
+    if (weaknesses.length) {
+      weakHtml = weaknesses.map(w => `
+        <div class="ref-section">
+          <div class="ref-title">&#9888; Gap &mdash; ${escapeHtml(w.question)}</div>
+          <div class="ref-text" style="white-space:pre-wrap;">
+            <strong>Your answer:</strong> ${escapeHtml(w.candidate_answer)}
+            ${w.missing_concepts && w.missing_concepts.length ? `\n<strong>Missing:</strong> ${escapeHtml(w.missing_concepts.join(', '))}` : ''}
+            ${w.model_answer ? `\n<strong>Model answer:</strong> ${escapeHtml(w.model_answer)}` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    let sugHtml = suggestions.map(s => `<li class="check-item"><span class="check-icon">&#9654;</span><div class="check-content"><span class="check-detail">${escapeHtml(s)}</span></div></li>`).join('');
+
+    div.innerHTML = `
+      <div class="report-header">
+        <div class="report-title">Panel Report &mdash; Interview Complete</div>
+        <div class="report-score score-partial">${o.overall_score !== undefined ? Math.round(o.overall_score) : '-'} <span>/ 100</span></div>
+      </div>
+      <p style="font-weight:600; margin-bottom:16px;">${escapeHtml(o.verdict || '')}</p>
+      <div class="report-title" style="margin-bottom:12px;">Concept Mastery</div>
+      <ul class="check-list">${conceptsHtml}</ul>
+      ${weakHtml}
+      ${sugHtml ? `<div class="report-title" style="margin-top:16px; margin-bottom:12px;">How to Improve</div><ul class="check-list">${sugHtml}</ul>` : ''}
     `;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;

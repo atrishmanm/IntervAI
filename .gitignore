@@ -1,6 +1,7 @@
 # Environment
 .env
 venv/
+env/
 
 # Python
 __pycache__/
@@ -11,7 +12,6 @@ __pycache__/
 dist/
 build/
 
-
 # IDE
 .vscode/
 .idea/
@@ -20,3 +20,28 @@ build/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# ── INTERVUE ──────────────────────────────────────────────
+# Raw data is NOT pushed to GitHub (too large, ~3.5GB).
+# Keep it local; upload to Kaggle as a Dataset for training.
+data/raw/
+data/processed/
+data/splits/
+data/tokenized/
+
+# Trained artifacts / checkpoints (regenerate via training)
+models/*/saved/
+models/generator/saved/
+*.pt
+*.pkl
+*.npy
+
+# Tokenizer output (regenerate)
+tokenizer/saved/
+
+# Junk duplicate scripts (Windows browser downloads)
+download_more_data*(*.py
+data_pipeline/download_more_data(1).py
+data_pipeline/download_more_data(2).py
+data_pipeline/download_more_data_1_.py
+data_pipeline/download_more_data_2_.py

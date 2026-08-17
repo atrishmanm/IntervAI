@@ -1,8 +1,11 @@
 """
 backend/inference_service.py
 =============================
-Provides analyze_answer() for the backend using purely rule-based and 
-keyword-based scoring. The expert_text is now provided directly from the DB.
+Provides analyze_answer() for the backend.
+
+Uses the CONTEXTUAL (semantic) scorer from analysis.semantic_scorer — this is the
+"ChatGPT-like" evaluation: it judges understanding, not just keyword matches.
+Falls back to the legacy keyword scorer only if the semantic scorer errors.
 """
 
 import sys
@@ -10,6 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from analysis.semantic_scorer import score_answer_contextual
 
 
 def analyze_answer(
@@ -20,21 +25,33 @@ def analyze_answer(
     expert_text: str = "",
 ) -> dict:
     """
-    Analyze a student's answer using keyword scoring.
-    Returns a structured analysis report dict.
+    Analyze a student's answer contextually (semantic understanding,
+    concept coverage, accuracy, completeness, quality).
+
+    Returns a structured analysis report dict (JSON-serializable).
     """
-    from analysis.scorer import score_answer
+    try:
+        report = score_answer_contextual(
+            student_answer=student_answer,
+            reference_answer=reference_answer,
+            key_phrases=key_phrases,
+            question_type=question_type,
+            expert_text=expert_text,
+        )
+        return report
+    except Exception as e:
+        # Fall back to the legacy keyword scorer so the pipeline never breaks.
+        from analysis.scorer import score_answer
 
-    report = score_answer(
-        student_answer=student_answer,
-        reference_answer=reference_answer,
-        key_phrases=key_phrases,
-        question_type=question_type,
-        expert_text=expert_text,
-        expert_score=1.0,  # 100% exact match since it's pulled from DB
-    )
-
-    return report.to_dict()
+        report = score_answer(
+            student_answer=student_answer,
+            reference_answer=reference_answer,
+            key_phrases=key_phrases,
+            question_type=question_type,
+            expert_text=expert_text,
+            expert_score=1.0,
+        )
+        return report.to_dict()
 
 
 def models_ready() -> dict:

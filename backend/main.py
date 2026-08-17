@@ -98,6 +98,34 @@ async def chat(req: ChatRequest):
     }
 
 
+@app.get("/api/report")
+async def get_report(session_id: str):
+    """Return the panel-style final report for a finished session."""
+    state = _sessions.get(session_id)
+    if state is None:
+        raise HTTPException(404, "Session not found. Start a new session first.")
+    if not state.finished:
+        return {
+            "session_id": session_id,
+            "finished": False,
+            "message": "Interview still in progress.",
+            "questions_answered": state.questions_asked,
+        }
+
+    # Regenerate report from the latest candidate state if not cached
+    if not state.report:
+        from orchestrator.candidate_state import CandidateStateManager
+        cand = CandidateStateManager().get_or_create(session_id)
+        from analysis.report import build_panel_report
+        state.report = build_panel_report(cand)
+
+    return {
+        "session_id": session_id,
+        "finished": True,
+        "panel_report": state.report,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     print("Starting AI Interview Prep V3 on http://localhost:8000")

@@ -1,15 +1,24 @@
 """
 train_all.py
 ============
-Master training pipeline for AI Interview Prep V3.
+Master training pipeline for INTERVUE — ChatGPT-Like Coding Interview Model.
 
 Steps:
-  1. Download datasets (stindardlogic/coding-interview-sft-100k)
-  2. Clean data (extract theoretical/output/concept questions)
-  3. Build question bank (SQLite)
+  Phase 0: Data Engineering
+    1. Download all datasets
+    2. Extract questions (existing)
+    3. Build question bank (existing)
+    4. Transform data into training formats
+    5. Build concept graph
+
+  Phase 1: Tokenizer
+    6. Train tokenizer (16K vocab, ByteLevel)
+
+  Phase 2-3: Model Training
+    7. Train generator (pretrain → domain → instruction → interview → evaluator → followup)
 
 Usage:
-    python train_all.py [--skip-download]
+    python train_all.py [--skip-download] [--stage all|data|tokenizer|train]
 """
 
 import sys
@@ -49,38 +58,97 @@ def run_step(fn, step_name: str):
 
 def main():
     import argparse
-    p = argparse.ArgumentParser(description="AI Interview Prep V3 -- Training Pipeline")
+    p = argparse.ArgumentParser(description="INTERVUE — Full Training Pipeline")
     p.add_argument("--skip-download", action="store_true", help="Skip download if data exists")
+    p.add_argument("--stage", default="all", choices=["all", "data", "tokenizer", "train"],
+                    help="Which stage to run")
+    p.add_argument("--skip-train", action="store_true", help="Skip model training stages")
     args = p.parse_args()
 
-    banner("AI Interview Prep V3 -- Training Pipeline")
-    TOTAL = 3
+    banner("INTERVUE — Training Pipeline")
 
-    # 1. Download
-    step(1, TOTAL, "Downloading datasets")
-    raw_exists = (ROOT / "data" / "raw" / "conversations.jsonl").exists()
-    if args.skip_download and raw_exists:
-        print("  Skipping download (data exists).")
-    else:
-        from data_pipeline.download_datasets import main as dl_main
-        run_step(dl_main, "Download")
+    # ── Phase 0: Data Engineering ──
+    if args.stage in ("all", "data"):
+        banner("Phase 0: Data Engineering")
 
-    # 2. Clean
-    step(2, TOTAL, "Extracting questions (theoretical, output, concept)")
-    from data_pipeline.clean_data import main as clean_main
-    run_step(clean_main, "Clean data")
+        TOTAL_DATA = 5
 
-    # 3. Build question bank
-    step(3, TOTAL, "Building SQLite question bank")
-    from data_pipeline.build_question_bank import main as bank_main
-    run_step(bank_main, "Question bank")
+        # 1. Download all datasets
+        step(1, TOTAL_DATA, "Downloading all datasets")
+        raw_exists = (ROOT / "data" / "raw" / "conversations.jsonl").exists()
+        if args.skip_download and raw_exists:
+            print("  Skipping download (data exists).")
+        else:
+            from data_pipeline.download_datasets import main as dl_main
+            run_step(dl_main, "Download all datasets")
 
+        # 2. Extract questions (existing pipeline)
+        step(2, TOTAL_DATA, "Extracting questions")
+        from data_pipeline.clean_data import main as clean_main
+        run_step(clean_main, "Clean data")
 
-    banner("Training Pipeline Complete!")
+        # 3. Build question bank
+        step(3, TOTAL_DATA, "Building SQLite question bank")
+        from data_pipeline.build_question_bank import main as bank_main
+        run_step(bank_main, "Question bank")
+
+        # 4. Transform data into training formats
+        step(4, TOTAL_DATA, "Transforming data into training formats")
+        from data_pipeline.transform_training_data import main as transform_main
+        run_step(transform_main, "Transform training data")
+
+        # 5. Build concept graph
+        step(5, TOTAL_DATA, "Building concept graph")
+        from data_pipeline.build_concept_graph import main as concept_main
+        run_step(concept_main, "Concept graph")
+
+    # ── Phase 1: Tokenizer ──
+    if args.stage in ("all", "tokenizer"):
+        banner("Phase 1: Tokenizer Training")
+        from tokenizer.train_tokenizer import main as tok_main
+        run_step(tok_main, "Train tokenizer")
+
+    # ── Phase 2-3: Model Training ──
+    if args.stage in ("all", "train") and not args.skip_train:
+        banner("Phase 2-3: Model Training")
+        print("\nNote: Model training requires a GPU (or Colab).")
+        print("Each stage will save checkpoints. You can resume if interrupted.\n")
+
+        stages = [
+            ("Stage 1: Code Pretraining", "models.generator.train_pretrain"),
+            ("Stage 2: CS Domain Training", "models.generator.train_domain"),
+            ("Stage 3: Instruction Tuning", "models.generator.train_instruction"),
+            ("Stage 4: Interview Dialogue", "models.generator.train_interview"),
+            ("Stage 5: Answer Evaluation", "models.generator.train_evaluator"),
+            ("Stage 6: Follow-up Generation", "models.generator.train_followup"),
+        ]
+
+        for i, (name, module_path) in enumerate(stages, 1):
+            step(i, len(stages), name)
+            try:
+                import importlib
+                mod = importlib.import_module(module_path)
+                run_step(mod.main, name)
+            except Exception as e:
+                print(f"\nX {name} failed: {e}")
+                print("  You can re-run this stage individually.")
+                import traceback
+                traceback.print_exc()
+
+    # ── Done ──
+    banner("Pipeline Complete!")
     print("\nNext steps:")
     print("  1. Start the backend:")
     print("       python backend/main.py")
     print("  2. Open http://localhost:8000 in your browser")
+    print()
+    print("To train model stages individually:")
+    print("  python models/generator/train_pretrain.py")
+    print("  python models/generator/train_domain.py")
+    print("  python models/generator/train_instruction.py")
+    print("  python models/generator/train_interview.py")
+    print("  python models/generator/train_evaluator.py")
+    print("  python models/generator/train_followup.py")
     print()
 
 
