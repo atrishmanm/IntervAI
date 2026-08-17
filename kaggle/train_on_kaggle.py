@@ -58,11 +58,20 @@ RAW_DIR = REPO / "data" / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 def copy_dataset_into_raw():
-    """Find the intervai-data dataset in /kaggle/input and copy into data/raw."""
+    """Find the intervai-data dataset in /kaggle/input and copy into data/raw.
+
+    Kaggle preserves whatever folder structure your upload had (e.g. files
+    nested under raw/ or data/raw/). We flatten ALL files into data/raw/ by
+    basename, keeping the cruxeval/ subfolder (train.py expects it there).
+    """
     print("\nLocating dataset in /kaggle/input...")
     input_dir = Path("/kaggle/input")
     if not input_dir.exists():
         raise RuntimeError("/kaggle/input not found — did you add your dataset to the notebook?")
+
+    print("  Contents of /kaggle/input:")
+    for d in input_dir.iterdir():
+        print(f"    - {d.name}")
 
     # Find the dataset dir (intervai-data, or whichever has our files)
     dataset_dirs = []
@@ -73,38 +82,53 @@ def copy_dataset_into_raw():
         if {"starcoder_large.jsonl", "conversations.jsonl"} & names:
             dataset_dirs.append(d)
     if not dataset_dirs:
-        print("  WARNING: no dataset with expected files found in /kaggle/input:")
-        for d in input_dir.iterdir():
-            print(f"    - {d.name}")
+        print("  WARNING: no dataset with expected files found in /kaggle/input.")
         print("  Skipping copy. Training will skip missing files.")
         return
 
     src = dataset_dirs[0]
     print(f"  Found dataset: {src}")
 
-    # Copy everything (files + subdirs like cruxeval/)
+    # Flatten every file into data/raw/ by basename, but keep files that live
+    # in a 'cruxeval' folder under data/raw/cruxeval/.
     copied = 0
-    for item in src.rglob("*"):
-        rel = item.relative_to(src)
-        dest = RAW_DIR / rel
-        if item.is_dir():
-            dest.mkdir(parents=True, exist_ok=True)
+    for item in sorted(src.rglob("*")):
+        if not item.is_file():
+            continue
+        parts = item.relative_to(src).parts
+        if len(parts) >= 2 and parts[0].lower() == "cruxeval":
+            dest = RAW_DIR / "cruxeval" / item.name
         else:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                shutil.copy2(item, dest)
-                copied += 1
+            dest = RAW_DIR / item.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            shutil.copy2(item, dest)
+            copied += 1
+            print(f"    + {item.name}")
     print(f"  Copied {copied} files into {RAW_DIR}")
 
-    # Sanity check: report sizes
-    for name in ["starcoder_large.jsonl", "opencodeinstruct.jsonl", "conversations.jsonl",
-                 "codesearchnet.jsonl", "codefeedback.jsonl", "oasst_coding.jsonl",
-                 "codealpaca.jsonl", "mohler_asag.jsonl", "mmlu_cs.json"]:
-        p = RAW_DIR / name
-        if p.exists():
-            print(f"    OK  {name} ({p.stat().st_size/1e6:.1f} MB)")
+    # Sanity check: find each required file anywhere under data/raw
+    required = ["starcoder_large.jsonl", "opencodeinstruct.jsonl", "conversations.jsonl",
+                "codesearchnet.jsonl", "codefeedback.jsonl", "oasst_coding.jsonl",
+                "codealpaca.jsonl", "mohler_asag.jsonl", "mmlu_cs.json",
+                "cruxeval/cruxeval.jsonl"]
+    print("\n  Sanity check:")
+    for name in required:
+        found = None
+        for p in RAW_DIR.rglob(Path(name).name):
+            if Path(name).name == p.name:
+                found = p
+                break
+        if found:
+            print(f"    OK  {name} ({found.stat().st_size/1e6:.1f} MB)")
         else:
             print(f"    !!  {name} MISSING")
+
+    # Show final tree of data/raw
+    print("\n  data/raw tree:")
+    for p in sorted(RAW_DIR.rglob("*")):
+        if p.is_file():
+            print(f"    {p.relative_to(RAW_DIR)}  ({p.stat().st_size/1e6:.1f} MB)")
 
 copy_dataset_into_raw()
 
