@@ -51,26 +51,29 @@ if str(ROOT) not in sys.path:
 
 
 # ─────────────────────────────────────────────────────────────
-# GPU detection
+# GPU detection (multi-GPU aware)
 # ─────────────────────────────────────────────────────────────
 
-def _detect_gpu():
-    """Return a dict describing the available GPU."""
+def _detect_gpus():
+    """Return a dict describing the available GPU(s)."""
     try:
         import torch
         if not torch.cuda.is_available():
-            return {"available": False, "name": "CPU", "vram_gb": 0}
+            return {"available": False, "names": ["CPU"], "vram_gb": 0.0, "count": 0}
+        count = torch.cuda.device_count()
         props = torch.cuda.get_device_properties(0)
         vram_gb = round(props.total_memory / (1024 ** 3), 1)
-        return {"available": True, "name": props.name, "vram_gb": vram_gb}
+        names = [torch.cuda.get_device_properties(i).name for i in range(count)]
+        return {"available": True, "names": names, "vram_gb": vram_gb, "count": count}
     except Exception:
-        return {"available": False, "name": "CPU", "vram_gb": 0}
+        return {"available": False, "names": ["CPU"], "vram_gb": 0.0, "count": 0}
 
 
-GPU = _detect_gpu()
+GPU = _detect_gpus()
 DEVICE = "cuda" if GPU["available"] else "cpu"
-GPU_NAME = GPU["name"]
+GPU_NAME = GPU["names"][0]
 VRAM_GB = GPU["vram_gb"]
+NUM_GPUS = GPU["count"]
 
 # ─────────────────────────────────────────────────────────────
 # Hardware-aware training config
@@ -78,6 +81,10 @@ VRAM_GB = GPU["vram_gb"]
 # Small VRAM (4GB GTX 1650): batch 2, grad accumulation 8
 # Large VRAM (16GB T4/P100): batch 16, grad accumulation 4
 # CPU: batch 1 (for smoke tests / tiny debugging)
+#
+# On multi-GPU: BASE_BATCH_SIZE is the PER-GPU batch. DataParallel shards it
+# across GPUs, so the global batch becomes BASE_BATCH_SIZE * NUM_GPUS and the
+# effective batch (after accumulation) is BASE_BATCH_SIZE * NUM_GPUS * ACCUM.
 # ─────────────────────────────────────────────────────────────
 
 if VRAM_GB >= 12:
@@ -93,13 +100,19 @@ else:
     GRAD_ACCUM_STEPS = 1
     USE_FP16 = False
 
-# Effective batch = BASE_BATCH_SIZE * GRAD_ACCUM_STEPS
-EFFECTIVE_BATCH_SIZE = BASE_BATCH_SIZE * GRAD_ACCUM_STEPS
+# Effective batch = BASE_BATCH_SIZE * NUM_GPUS * GRAD_ACCUM_STEPS
+EFFECTIVE_BATCH_SIZE = BASE_BATCH_SIZE * NUM_GPUS * GRAD_ACCUM_STEPS
 
-# Which model size to use per GPU:
-#   small VRAM  → Small model (5.9M) for safety
-#   large VRAM  → Medium model (10.7M)
-MODEL_SIZE = "small" if VRAM_GB < 8 else "medium"
+# Which model size to use per GPU tier:
+#   CPU/small VRAM    → Small model (5.9M)
+#   >=8GB VRAM        → Medium model (10.7M)
+#   >=12GB VRAM (T4)  → Large model (24.3M)  [2x T4 on Kaggle fits it easily]
+MODEL_SIZE = "large" if VRAM_GB >= 12 else ("medium" if VRAM_GB >= 8 else "small")
+
+# Allow override via env var (e.g. INTERVUE_MODEL=small for fast smoke tests)
+_MODEL_OVERRIDE = os.environ.get("INTERVUE_MODEL", "").strip().lower()
+if _MODEL_OVERRIDE in ("small", "medium", "large"):
+    MODEL_SIZE = _MODEL_OVERRIDE
 
 # ─────────────────────────────────────────────────────────────
 # Tokens / vocab
@@ -116,9 +129,13 @@ def print_env_summary():
     """Print what was detected (call at the start of each training script)."""
     print("=" * 60)
     print(f"  Environment:  {ENV.upper()}")
-    print(f"  GPU:          {GPU_NAME} ({VRAM_GB} GB)" if GPU["available"] else "  GPU:          NONE (CPU)")
-    print(f"  Device:       {DEVICE}")
-    print(f"  Base batch:   {BASE_BATCH_SIZE}  (grad accum x{GRAD_ACCUM_STEPS} = eff {EFFECTIVE_BATCH_SIZE})")
+    if GPU["available"]:
+        gpu_str = " + ".join(GPU["names"]) + f" ({len(GPU['names'])}x)"
+    else:
+        gpu_str = "NONE (CPU)"
+    print(f"  GPU:          {gpu_str} ({VRAM_GB} GB each)" if GPU["available"] else "  GPU:          NONE (CPU)")
+    print(f"  Device:       {DEVICE}  (GPUs: {NUM_GPUS})")
+    print(f"  Base batch:   {BASE_BATCH_SIZE}  x{NUM_GPUS} GPU(s) x{GRAD_ACCUM_STEPS} accum = eff {EFFECTIVE_BATCH_SIZE}")
     print(f"  FP16:         {USE_FP16}")
     print(f"  Model size:   {MODEL_SIZE}")
     print(f"  ROOT:         {ROOT}")

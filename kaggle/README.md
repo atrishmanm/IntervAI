@@ -39,14 +39,24 @@ with `--limit` for smoke tests). Everything else: **use Kaggle**.
 
 ---
 
-## 3. What happens
+## 3. What happens (research-grade pipeline)
 
-- `env_config.py` detects `/kaggle/working` → **batch=16, accum=4, FP16, medium
-  model (10.7M)**. No code changes needed vs. your laptop.
-- Each stage saves an atomic checkpoint to
-  `/kaggle/working/IntervAI/models/generator/saved/<stage>.pt`.
-- Resuming: re-run the same stage script — it auto-loads the last checkpoint.
-- Kaggle sessions stop after ~9h. To continue, re-run the same script; it resumes.
+- `env_config.py` detects `/kaggle/working` → **batch=16/GPU, accum=4, FP16,
+  large model (24.3M)**. On **2x T4** the model is wrapped in `DataParallel` so
+  both GPUs are used (global batch = 16 × 2 GPUs × 4 accum = 128).
+- Per stage, the trainer **auto-tunes**:
+  - **Batch-size profiler** — tries larger per-GPU batches until OOM, picks the max.
+  - **LR range test** — ramps LR exponentially, picks the best peak LR.
+  - **Early stopping** with best-checkpoint tracking.
+- Metrics: val loss, perplexity, **token accuracy + top-5 accuracy**, logged as
+  JSON to `results/<stage>.log`.
+- **Crash-safe checkpoints**: a `<stage>.resume` checkpoint is written every
+  `ckpt_every` optimizer steps (plus FP16 scaler state), so a Ctrl-C / session
+  timeout loses at most ~2000 steps, not a full epoch.
+- Curriculum fixes baked in: full-content SHA256 dedup (no more 200-char bug),
+  evaluator trains on **code feedback** data, and followup fine-tunes from
+  `interview_tuned.pt` (no catastrophic forgetting).
+- Override model size: `INTERVUE_MODEL=small|medium|large` (default on T4 = large).
 
 ---
 
@@ -77,7 +87,8 @@ python models/generator/train.py --stage pretrain --limit 20
 python models/generator/train.py --stage interview --limit 20
 ```
 
-These use batch=1, no FP16, and finish in ~1 minute each.
+These use batch=1, no FP16, and finish in ~1 minute each (auto-tuning is
+skipped on CPU).
 
 ---
 
@@ -86,7 +97,8 @@ These use batch=1, no FP16, and finish in ~1 minute each.
 | Symptom | Fix |
 |---------|-----|
 | `No usable data found` | Data not mounted — check `/kaggle/input` contents, re-add the dataset |
-| OOM on Kaggle | Shouldn't happen (batch=16 fits T4). Reduce via `GRAD_ACCUM_STEPS` in env_config if needed |
-| Session timeout | Resume is automatic — just rerun the script |
+| OOM on Kaggle | Batch profiler auto-shrinks to fit; if still OOM set `INTERVUE_MODEL=medium` |
+| Session timeout | Resume is automatic — just rerun the script (mid-epoch resume saves ~2000 steps) |
 | `Tokenizer not found` | Run the tokenizer cell first, or upload your locally-trained `tokenizer.json` |
 | Repo clone fails | `github.com/<YOUR_USER>` — replace with your actual repo URL |
+| Checkpoint size mismatch after `INTERVUE_MODEL` change | Different model sizes store different shapes — retrain or set the same size as before |

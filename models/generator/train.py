@@ -1,12 +1,12 @@
 """
 models/generator/train.py
 ==========================
-UNIFIED training script for ALL curriculum stages.
+UNIFIED research-grade training script for ALL curriculum stages.
 
 Runs the same on:
   - Local laptop  (GTX 1650 4GB  → small model, batch 2, accum 8)
-  - Kaggle        (T4/P100 16GB  → medium model, batch 16, accum 4)
-  - Colab         (T4 16GB       → medium model)
+  - Kaggle        (2x T4 16GB    → large model, batch 16/GPU, accum 4, DataParallel)
+  - Colab         (T4 16GB       → large model)
 
 Usage:
     python models/generator/train.py --stage pretrain     # Stage 1
@@ -17,11 +17,16 @@ Usage:
     python models/generator/train.py --stage followup     # Stage 6
     python models/generator/train.py --stage all          # Run all in order
 
-Every stage:
-  - Auto-detects environment & GPU (env_config)
-  - Saves checkpoints with resume support (epoch/step/optimizer/scheduler)
-  - Uses FP16 + gradient accumulation
-  - Validates on a holdout split
+Research-grade features:
+  - Multi-GPU (DataParallel) on Kaggle 2x T4
+  - Auto LR-finder (LR range test) + batch-size memory profiler per stage
+  - Early stopping with patience (best-checkpoint tracking)
+  - Crash-safe mid-epoch checkpointing (every N optimizer steps) + FP16 scaler state
+  - Token accuracy + top-5 accuracy on validation
+  - JSON training log per stage (results/<stage>.json)
+  - Correct full-content dedup (SHA256) — no more 200-char truncation bug
+  - Fixed curriculum chain (followup now fine-tunes from interview_tuned, not evaluator)
+  - Evaluator stage trained on CODE feedback data (not educational ASAG)
 """
 
 import argparse
@@ -38,13 +43,16 @@ from torch.utils.data import DataLoader, random_split
 
 from env_config import (
     ENV, ROOT as ENV_ROOT, DATA_DIR, SAVE_ROOT, DEVICE, BASE_BATCH_SIZE,
-    GRAD_ACCUM_STEPS, USE_FP16, VOCAB_SIZE, MODEL_SIZE, print_env_summary,
+    GRAD_ACCUM_STEPS, USE_FP16, VOCAB_SIZE, MODEL_SIZE, NUM_GPUS,
+    EFFECTIVE_BATCH_SIZE, print_env_summary,
 )
 from models.generator.model import create_small_model, create_medium_model, create_large_model
 from models.generator.train_utils import (
     TextDataset, ChatDataset, get_cosine_schedule_with_warmup,
     train_epoch, evaluate, save_checkpoint, load_checkpoint,
-    load_tokenizer, make_training_configs,
+    load_tokenizer, make_training_configs, dedup_examples,
+    wrap_data_parallel, unwrap_model, find_learning_rate, profile_batch_size,
+    _make_scaler,
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -63,7 +71,6 @@ STAGE_DATA = {
         "data/raw/opencodeinstruct.jsonl",
         "data/raw/codefeedback.jsonl",
         "data/raw/oasst_coding.jsonl",
-        "data/processed/dialogues.jsonl",
     ],
     "instruction": [
         "data/raw/codealpaca.jsonl",
@@ -74,12 +81,15 @@ STAGE_DATA = {
         "data/raw/opencodeinstruct.jsonl",
     ],
     "evaluator": [
-        "data/raw/mohler_asag.jsonl",
+        "data/raw/codefeedback.jsonl",
         "data/raw/codealpaca.jsonl",
+        "data/raw/mohler_asag.jsonl",
     ],
     "followup": [
         "data/raw/oasst_coding.jsonl",
         "data/raw/conversations.jsonl",
+        "data/raw/opencodeinstruct.jsonl",
+        "data/raw/codefeedback.jsonl",
     ],
 }
 
@@ -100,7 +110,7 @@ STAGE_INIT = {
     "instruction": "domain_tuned.pt",
     "interview": "domain_tuned.pt",     # instruction not strictly required before interview
     "evaluator": "interview_tuned.pt",
-    "followup": "evaluator.pt",
+    "followup": "interview_tuned.pt",   # FIXED: was evaluator.pt (catastrophic forgetting)
 }
 
 # Which model factory to use
@@ -160,14 +170,9 @@ def build_dataset_for_stage(stage, tokenizer, config):
             f"No usable data found for stage '{stage}'. Check files in {DATA_DIR}"
         )
 
-    # Deduplicate (exact duplicates waste compute)
-    seen = set()
-    uniq = []
-    for m in examples:
-        key = json.dumps(m, ensure_ascii=False)[:200]
-        if key not in seen:
-            seen.add(key)
-            uniq.append(m)
+    # Deduplicate on FULL content (SHA256) — the 200-char truncation bug
+    # previously collapsed distinct conversations, losing 80%+ of the data.
+    uniq = dedup_examples(examples)
     print(f"  Deduplicated: {len(examples)} -> {len(uniq)}")
 
     # Build a wrapper dataset from the raw message lists
@@ -224,6 +229,20 @@ def load_model_for_stage(stage, vocab_size):
 
 
 # ─────────────────────────────────────────────────────────────
+# Training-log writer (research-grade JSON metrics)
+# ─────────────────────────────────────────────────────────────
+
+def _append_log(stage, record, path=None):
+    """Append one JSON line to results/<stage>.log."""
+    import os
+    log_dir = ENV_ROOT / "results"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = path or (log_dir / f"{stage}.log")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+# ─────────────────────────────────────────────────────────────
 # Single stage runner
 # ─────────────────────────────────────────────────────────────
 
@@ -247,53 +266,142 @@ def run_stage(stage, config):
 
     # Data
     train_ds, val_ds = build_dataset_for_stage(stage, tokenizer, config)
-    bs = config["batch_size"]
-    train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=bs)
-    print(f"Train: {len(train_ds)} | Val: {len(val_ds)} | Batch: {bs}")
 
-    # Model
+    # Model + multi-GPU (wrap BEFORE tuning so batches are sharded per GPU)
     model = load_model_for_stage(stage, vocab_size)
     model = model.to(DEVICE)
-    print(f"Model params: {model.num_params_millions:.1f}M")
+    model = wrap_data_parallel(model)  # no-op if 1 GPU
+    print(f"Model params: {unwrap_model(model).num_params_millions:.1f}M  (GPUs: {NUM_GPUS})")
 
-    # Optimizer + scheduler
-    opt = torch.optim.AdamW(
-        model.parameters(),
-        lr=config["lr"],
-        betas=config["betas"],
-        weight_decay=config["weight_decay"],
-    )
+    # ── Auto-tuning runs backward passes, so snapshot weights first ──
+    def _snapshot():
+        return {k: v.detach().clone() for k, v in unwrap_model(model).state_dict().items()}
+
+    def _restore(sd):
+        unwrap_model(model).load_state_dict(sd)
+        torch.cuda.empty_cache()
+
+    # ── Auto-tuning: batch-size profiler (per-GPU) ──
+    bs_per_gpu = config["batch_size"]
+    if torch.cuda.is_available() and config.get("lr_finder", True):
+        snap = _snapshot()
+        try:
+            bs_per_gpu = profile_batch_size(unwrap_model(model), train_ds, DEVICE,
+                                            base_batch=bs_per_gpu, use_fp16=USE_FP16)
+        finally:
+            _restore(snap)
+    # DataParallel shards a batch of `bs_per_gpu * NUM_GPUS` into bs_per_gpu/GPU.
+    loader_bs = bs_per_gpu * max(NUM_GPUS, 1)
+    config["batch_size"] = loader_bs
+    num_workers = 2 if (ENV == "kaggle" and torch.cuda.is_available()) else 0
+    train_loader = DataLoader(train_ds, batch_size=loader_bs, shuffle=True,
+                              num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+                              persistent_workers=(num_workers > 0))
+    val_loader = DataLoader(val_ds, batch_size=loader_bs,
+                            num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+                            persistent_workers=(num_workers > 0))
+    print(f"Train: {len(train_ds)} | Val: {len(val_ds)} | Per-GPU batch: {bs_per_gpu} "
+          f"| Loader batch: {loader_bs} | GPUs: {NUM_GPUS}")
+
+    # ── Optimizer (LR finder re-inits it) ──
+    def _optimizer(lr):
+        return torch.optim.AdamW(
+            unwrap_model(model).parameters(),
+            lr=lr,
+            betas=config["betas"],
+            weight_decay=config["weight_decay"],
+        )
+
+    # ── Auto-tuning: LR finder ──
+    if config.get("lr_finder", True) and torch.cuda.is_available():
+        snap = _snapshot()
+        try:
+            lr = find_learning_rate(
+                unwrap_model(model), train_loader, DEVICE, _optimizer, config,
+                use_fp16=USE_FP16,
+            )
+        finally:
+            _restore(snap)
+        config["lr"] = lr
+    opt = _optimizer(config["lr"])
+
     total_steps = len(train_loader) // config["grad_accum_steps"] * config["epochs"]
     warmup = max(1, int(total_steps * config["warmup_ratio"]))
     sched = get_cosine_schedule_with_warmup(opt, warmup, total_steps)
 
-    # Checkpoint / resume
-    ckpt_path = SAVE_ROOT / STAGE_CKPT[stage]
-    start_epoch = 0
-    best_val_loss = float("inf")
-    if ckpt_path.exists():
-        ep, loss, step = load_checkpoint(ckpt_path, model, opt, sched)
-        start_epoch = ep + 1
-        best_val_loss = loss
-        print(f"  Resuming from epoch {ep} (val_loss={loss:.4f})")
+    # FP16 scaler (persisted across resume)
+    scaler = _make_scaler(USE_FP16)
 
-    # Training loop
+    # ── Checkpoint / resume ──
+    ckpt_path = SAVE_ROOT / STAGE_CKPT[stage]
+    resume_path = SAVE_ROOT / f"{STAGE_CKPT[stage]}.resume"
+    start_epoch = 0
+    global_step = 0
+    best_val_loss = float("inf")
+    patience_left = config.get("patience", 2)
+    # Prefer the crash-safe resume checkpoint if it exists (it is most recent)
+    resume_source = resume_path if resume_path.exists() else (ckpt_path if ckpt_path.exists() else None)
+    if resume_source:
+        ep, loss, step = load_checkpoint(resume_source, model, opt, sched, scaler=scaler)
+        if ep >= 0:
+            start_epoch = ep + 1
+            best_val_loss = loss
+            global_step = step
+            print(f"  Resuming from epoch {ep} (val_loss={loss:.4f}, step={step})")
+        else:
+            print("  No compatible checkpoint — training from scratch.")
+
+    # Training loop (mid-epoch checkpoint callback uses `cur_epoch` via closure list)
+    cur_epoch = [start_epoch - 1]
+
+    def _mid_epoch_save(step, path):
+        save_checkpoint(unwrap_model(model), opt, sched, cur_epoch[0], best_val_loss,
+                        path, step=step,
+                        extra={"stage": stage, "best_val_loss": best_val_loss},
+                        scaler=scaler)
+
     for epoch in range(start_epoch, config["epochs"]):
+        cur_epoch[0] = epoch
         print(f"\n--- Epoch {epoch+1}/{config['epochs']} ---")
-        train_loss, steps = train_epoch(
+        train_loss, steps, global_step = train_epoch(
             model, train_loader, opt, sched, DEVICE,
             grad_clip=config["grad_clip"],
             grad_accum_steps=config["grad_accum_steps"],
             use_fp16=USE_FP16,
+            start_step=global_step,
+            checkpoint_every=config.get("ckpt_every"),
+            checkpoint_path=resume_path,
+            on_checkpoint=_mid_epoch_save,
+            scaler=scaler,
         )
-        val_loss, val_ppl = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
-        print(f"  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+        val = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
+        val_loss, val_ppl = val["loss"], val["ppl"]
+        print(f"  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  ppl={val_ppl:.2f}"
+              f"  tok_acc={val['tok_acc']:.4f}  top5_acc={val['top5_acc']:.4f}")
 
+        # Log per-epoch metrics
+        _append_log(stage, {
+            "epoch": epoch + 1, "stage": stage,
+            "train_loss": train_loss, "val_loss": val_loss,
+            "ppl": val_ppl, "tok_acc": val["tok_acc"], "top5_acc": val["top5_acc"],
+            "lr": opt.param_groups[0]["lr"], "global_step": global_step,
+            "elapsed_min": round((time.time() - t0) / 60, 2),
+        })
+
+        # Best-checkpoint tracking + early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            save_checkpoint(model, opt, sched, epoch, val_loss, ckpt_path, step=steps,
-                            extra={"stage": stage, "best_val_loss": best_val_loss})
+            patience_left = config.get("patience", 2)
+            save_checkpoint(unwrap_model(model), opt, sched, epoch, val_loss, ckpt_path,
+                            step=global_step,
+                            extra={"stage": stage, "best_val_loss": best_val_loss},
+                            scaler=scaler)
+        else:
+            patience_left -= 1
+            print(f"  [early] val_loss did not improve ({patience_left} left)")
+            if patience_left <= 0:
+                print(f"  Early stopping after epoch {epoch+1} (best val_loss={best_val_loss:.4f})")
+                break
 
     print(f"\n  {stage} done in {(time.time()-t0)/60:.1f} min. Best val_loss={best_val_loss:.4f}")
     print(f"  Checkpoint: {ckpt_path}")

@@ -1,7 +1,8 @@
 """
 kaggle/train_on_kaggle.py
 ==========================
-Run INTERVUE training on Kaggle (T4/P100 16GB) — fully automatic.
+Run INTERVUE research-grade training on Kaggle (1x or 2x T4/P100) — fully
+automatic, resume-safe.
 
 What it does:
   1. Clones the IntervAI repo (if not present)
@@ -9,10 +10,17 @@ What it does:
      into the repo's data/raw/ folder (the trainer + tokenizer read from there)
   3. Installs dependencies
   4. Retrains the tokenizer (it is NOT in the repo — it's gitignored)
-  5. Runs all 6 curriculum stages with checkpoints
+  5. Runs all 6 curriculum stages with the research-grade trainer:
+       - Multi-GPU (DataParallel on 2x T4)
+       - Auto LR-finder + batch-size profiler per stage
+       - Early stopping + best-checkpoint tracking
+       - Crash-safe mid-epoch checkpoints (resume within an epoch)
+       - Token accuracy / top-5 accuracy metrics
+       - JSON training logs in results/<stage>.log
 
 REQUIRED SETUP ON KAGGLE (before running):
   1. New Notebook → Settings → Accelerator = GPU T4 x2 (or P100)
+     (2 GPUs are used automatically; 1 GPU also works fine)
   2. Add Data → your `intervai-data` dataset
      (must contain: starcoder_large.jsonl, opencodeinstruct.jsonl,
       conversations.jsonl, codesearchnet.jsonl, codefeedback.jsonl,
@@ -21,6 +29,9 @@ REQUIRED SETUP ON KAGGLE (before running):
   3. Run this cell (paste the whole file, or run the line below):
 
      !python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all
+
+  Optional: set INTERVUE_MODEL=large|medium|small to override model size
+  (default on T4 is large = 24.3M params).
 
 Checkpoints land in /kaggle/working/IntervAI/models/generator/saved/.
 Download them when done. Re-run the same cell to resume after a timeout.

@@ -12,6 +12,7 @@ Features:
   - Hardware-aware batch sizing (see env_config)
 """
 
+import hashlib
 import json
 import math
 import time
@@ -20,6 +21,29 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+
+
+# ─────────────────────────────────────────────────────────────
+# Multi-GPU helpers
+# ─────────────────────────────────────────────────────────────
+
+def wrap_data_parallel(model, device_ids=None):
+    """Wrap a model in DataParallel if >1 GPU is available.
+
+    Returns the wrapped model. The caller should keep a reference to the
+    underlying module via `.module` for checkpoint save/load (DataParallel
+    stores weights with a 'module.' prefix).
+    """
+    import torch
+    n = torch.cuda.device_count()
+    if n > 1:
+        model = nn.DataParallel(model, device_ids=device_ids or list(range(n)))
+    return model
+
+
+def unwrap_model(model):
+    """Return the underlying module (strip DataParallel wrapper)."""
+    return model.module if isinstance(model, nn.DataParallel) else model
 
 
 # ─────────────────────────────────────────────────────────────
@@ -35,13 +59,15 @@ def import_env():
         sys.path.insert(0, str(root))
     from env_config import (
         ENV, ROOT, DATA_DIR, SAVE_ROOT, DEVICE, BASE_BATCH_SIZE,
-        GRAD_ACCUM_STEPS, USE_FP16, VOCAB_SIZE, MODEL_SIZE, print_env_summary,
+        GRAD_ACCUM_STEPS, USE_FP16, VOCAB_SIZE, MODEL_SIZE,
+        NUM_GPUS, EFFECTIVE_BATCH_SIZE, print_env_summary,
     )
     return dict(
         ENV=ENV, ROOT=ROOT, DATA_DIR=DATA_DIR, SAVE_ROOT=SAVE_ROOT,
         DEVICE=DEVICE, BASE_BATCH_SIZE=BASE_BATCH_SIZE,
         GRAD_ACCUM_STEPS=GRAD_ACCUM_STEPS, USE_FP16=USE_FP16,
         VOCAB_SIZE=VOCAB_SIZE, MODEL_SIZE=MODEL_SIZE,
+        NUM_GPUS=NUM_GPUS, EFFECTIVE_BATCH_SIZE=EFFECTIVE_BATCH_SIZE,
         print_env_summary=print_env_summary,
     )
 
@@ -284,6 +310,29 @@ class ChatDataset(Dataset):
 
 
 # ─────────────────────────────────────────────────────────────
+# Deduplication
+# ─────────────────────────────────────────────────────────────
+
+def dedup_examples(examples):
+    """Deduplicate example message-lists using a full-content SHA256 hash.
+
+    IMPORTANT: the previous implementation truncated keys to 200 chars, which
+    collapsed distinct conversations that merely shared an opening prompt. A
+    full-content hash only removes EXACT duplicates — the correct behaviour.
+    """
+    seen = set()
+    uniq = []
+    for m in examples:
+        key = hashlib.sha256(
+            json.dumps(m, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        if key not in seen:
+            seen.add(key)
+            uniq.append(m)
+    return uniq
+
+
+# ─────────────────────────────────────────────────────────────
 # Learning Rate Schedule
 # ─────────────────────────────────────────────────────────────
 
@@ -301,56 +350,38 @@ def get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps, min_lr
 # Training Loop (with grad accumulation + optional FP16)
 # ─────────────────────────────────────────────────────────────
 
+def _make_scaler(use_fp16):
+    try:
+        return torch.amp.GradScaler("cuda", enabled=use_fp16) if torch.cuda.is_available() else None
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=use_fp16) if torch.cuda.is_available() else None
+
+
 def train_epoch(model, dataloader, optimizer, scheduler, device,
-                grad_clip=1.0, grad_accum_steps=1, use_fp16=False, start_step=0):
-    """Train for one epoch. Returns average loss and total steps run."""
+                grad_clip=1.0, grad_accum_steps=1, use_fp16=False,
+                start_step=0, log_every=50, on_checkpoint=None,
+                checkpoint_every=None, checkpoint_path=None, scaler=None):
+    """Train for one epoch.
+
+    Returns (avg_loss, num_batches, global_step). If `on_checkpoint` is given,
+    it is called as on_checkpoint(global_step) periodically — use it for
+    mid-epoch checkpointing. If `checkpoint_every` and `checkpoint_path` are
+    given, saves a resume checkpoint every N optimizer steps automatically.
+    """
     model.train()
     total_loss = 0.0
     num_batches = 0
+    global_step = start_step
     optimizer.zero_grad()
 
-    try:
-        scaler = torch.amp.GradScaler("cuda", enabled=use_fp16) if torch.cuda.is_available() else None
-    except (AttributeError, TypeError):
-        scaler = torch.cuda.amp.GradScaler(enabled=use_fp16) if torch.cuda.is_available() else None
+    if scaler is None:
+        scaler = _make_scaler(use_fp16)
 
-    for i, batch in enumerate(dataloader):
-        input_ids = batch["input_ids"].to(device, non_blocking=True)
-        labels = batch["labels"].to(device, non_blocking=True)
-
-        with torch.amp.autocast("cuda", enabled=use_fp16):
-            result = model(input_ids=input_ids, labels=labels)
-            loss = result["loss"] / grad_accum_steps
-
-        if use_fp16 and scaler is not None:
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
-
-        num_batches += 1
-
-        if (i + 1) % grad_accum_steps == 0:
-            if grad_clip > 0:
-                if use_fp16 and scaler is not None:
-                    scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            if use_fp16 and scaler is not None:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
-            optimizer.zero_grad()
-            if scheduler is not None:
-                scheduler.step()
-
-        total_loss += loss.item() * grad_accum_steps
-
-        if (num_batches % 50) == 0:
-            print(f"    batch {num_batches}/{len(dataloader)}  loss={loss.item()*grad_accum_steps:.4f}  lr={optimizer.param_groups[0]['lr']:.2e}")
-
-    # Flush any remaining gradient accum
-    if num_batches % grad_accum_steps != 0:
+    def _optimizer_step():
+        nonlocal global_step
         if grad_clip > 0:
+            if use_fp16 and scaler is not None:
+                scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         if use_fp16 and scaler is not None:
             scaler.step(optimizer)
@@ -360,16 +391,61 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
         optimizer.zero_grad()
         if scheduler is not None:
             scheduler.step()
+        global_step += 1
 
-    return total_loss / max(num_batches, 1), num_batches
+    for i, batch in enumerate(dataloader):
+        input_ids = batch["input_ids"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
+
+        with torch.amp.autocast("cuda", enabled=use_fp16):
+            result = model(input_ids=input_ids, labels=labels)
+            # Under DataParallel, loss is gathered into a vector (one per GPU);
+            # take the mean so all GPUs contribute evenly.
+            loss = result["loss"]
+            if getattr(loss, "dim", lambda: 0)() > 0:
+                loss = loss.mean()
+            loss = loss / grad_accum_steps
+
+        if use_fp16 and scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        num_batches += 1
+
+        if (i + 1) % grad_accum_steps == 0:
+            _optimizer_step()
+
+            # Mid-epoch checkpointing (crash-resilient)
+            if checkpoint_every and checkpoint_path and global_step % checkpoint_every == 0:
+                if on_checkpoint:
+                    on_checkpoint(global_step, checkpoint_path)
+
+        total_loss += loss.item() * grad_accum_steps
+
+        if (num_batches % log_every) == 0:
+            print(f"    batch {num_batches}/{len(dataloader)}  loss={loss.item()*grad_accum_steps:.4f}  lr={optimizer.param_groups[0]['lr']:.2e}")
+
+    # Flush any remaining gradient accum
+    if num_batches % grad_accum_steps != 0:
+        _optimizer_step()
+
+    return total_loss / max(num_batches, 1), num_batches, global_step
 
 
 @torch.no_grad()
 def evaluate(model, dataloader, device, use_fp16=False):
-    """Evaluate model. Returns average loss and perplexity."""
+    """Evaluate model. Returns dict with avg loss, perplexity, token accuracy.
+
+    Token accuracy = fraction of non-pad, non-shifted labels predicted exactly.
+    Top-5 accuracy = fraction where true token is in the top-5 predicted.
+    """
     model.eval()
     total_loss = 0.0
     num_batches = 0
+    correct_tok = 0
+    correct_top5 = 0
+    total_tok = 0
 
     for batch in dataloader:
         input_ids = batch["input_ids"].to(device)
@@ -377,32 +453,65 @@ def evaluate(model, dataloader, device, use_fp16=False):
 
         with torch.amp.autocast("cuda", enabled=use_fp16):
             result = model(input_ids=input_ids, labels=labels)
+            logits = result["logits"]
             loss = result["loss"]
+            if getattr(loss, "dim", lambda: 0)() > 0:
+                loss = loss.mean()
+
+        # Shift for next-token prediction (matches loss computation)
+        shift_logits = logits[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+
+        preds = shift_logits.argmax(dim=-1)
+        top5 = shift_logits.topk(5, dim=-1).indices  # (B, T-1, 5)
+
+        # Mask: only count non-pad positions
+        mask = shift_labels != unwrap_model(model).pad_id
+
+        correct_tok += ((preds == shift_labels) & mask).sum().item()
+        correct_top5 += ((shift_labels.unsqueeze(-1) == top5) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
+        total_tok += mask.sum().item()
 
         total_loss += loss.item()
         num_batches += 1
 
     avg_loss = total_loss / max(num_batches, 1)
     perplexity = math.exp(min(avg_loss, 20))  # Cap to avoid overflow
-    return avg_loss, perplexity
+    tok_acc = correct_tok / max(total_tok, 1)
+    top5_acc = correct_top5 / max(total_tok, 1)
+    return {
+        "loss": avg_loss,
+        "ppl": perplexity,
+        "tok_acc": tok_acc,
+        "top5_acc": top5_acc,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
 # Checkpoint save/load with resume support
 # ─────────────────────────────────────────────────────────────
 
-def save_checkpoint(model, optimizer, scheduler, epoch, loss, path, step=0, extra=None):
-    """Save training checkpoint (safe, robust)."""
+def _state_dict(model):
+    """Get state dict from a model, stripping DataParallel's 'module.' prefix."""
+    m = unwrap_model(model)
+    return m.state_dict()
+
+
+def save_checkpoint(model, optimizer, scheduler, epoch, loss, path, step=0,
+                    extra=None, scaler=None, tokenizer=None):
+    """Save training checkpoint (safe, robust). Includes scaler + global step."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    m = unwrap_model(model)
     state = {
         "epoch": epoch,
         "step": step,
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": _state_dict(model),
         "optimizer_state_dict": optimizer.state_dict() if optimizer else None,
         "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+        "scaler_state_dict": scaler.state_dict() if scaler is not None else None,
         "loss": loss,
-        "config": model.config.__dict__ if hasattr(model, "config") else {},
+        "config": m.config.__dict__ if hasattr(m, "config") else {},
     }
     if extra:
         state.update(extra)
@@ -413,10 +522,41 @@ def save_checkpoint(model, optimizer, scheduler, epoch, loss, path, step=0, extr
     print(f"  Checkpoint saved: {path}")
 
 
-def load_checkpoint(path, model, optimizer=None, scheduler=None):
-    """Load training checkpoint. Returns (epoch, loss, step)."""
+def load_checkpoint(path, model, optimizer=None, scheduler=None, scaler=None):
+    """Load training checkpoint. Returns (epoch, loss, step).
+
+    Handles both DataParallel-wrapped and plain models by stripping the
+    'module.' prefix when loading into a plain model (and vice-versa).
+
+    If the checkpoint's config does NOT match the current model's shape
+    (e.g. resuming a medium checkpoint into a small model), it warns and
+    returns (-1, 0, 0) so the caller starts training fresh rather than crash.
+    """
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    sd = checkpoint["model_state_dict"]
+
+    target = unwrap_model(model)
+    # Strip 'module.' prefix if present in saved dict but target is plain
+    if not isinstance(model, nn.DataParallel) and any(k.startswith("module.") for k in sd):
+        sd = {k[len("module."):]: v for k, v in sd.items()}
+    # Add prefix if saved plain but target wrapped
+    elif isinstance(model, nn.DataParallel) and not any(k.startswith("module.") for k in sd):
+        sd = {"module." + k: v for k, v in sd.items()}
+
+    # Shape-compatibility guard: different model sizes (small/medium/large)
+    # store different tensor shapes; silently loading would corrupt the model.
+    target_sd = target.state_dict()
+    shape_ok = True
+    for k, v in sd.items():
+        if k in target_sd and tuple(target_sd[k].shape) != tuple(v.shape):
+            shape_ok = False
+            break
+    if not shape_ok:
+        print(f"  WARN: checkpoint at {path} was saved from a different model "
+              f"size/shape than the current model. Starting fresh instead of resuming.")
+        return -1, 0.0, 0
+
+    target.load_state_dict(sd)
     if optimizer and checkpoint.get("optimizer_state_dict"):
         try:
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -427,6 +567,11 @@ def load_checkpoint(path, model, optimizer=None, scheduler=None):
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         except Exception as e:
             print(f"  WARN: Could not load scheduler state: {e}")
+    if scaler is not None and checkpoint.get("scaler_state_dict"):
+        try:
+            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        except Exception as e:
+            print(f"  WARN: Could not load scaler state: {e}")
     return (
         checkpoint.get("epoch", 0),
         checkpoint.get("loss", 0.0),
@@ -449,7 +594,15 @@ def load_tokenizer(path):
 # ─────────────────────────────────────────────────────────────
 
 def make_training_configs(env):
-    """Build hardware-aware training configs."""
+    """Build hardware-aware training configs.
+
+    Research-grade defaults:
+      - lr: peak LR (LR-finder will auto-adjust it at stage start)
+      - epochs: max epochs (early stopping can end sooner)
+      - patience: epochs of no val improvement before early stop
+      - ckpt_every: save a resume checkpoint every N optimizer steps (crash-safe)
+      - max_len: sequence length for the stage
+    """
     batch = env["BASE_BATCH_SIZE"]
     accum = env["GRAD_ACCUM_STEPS"]
     return {
@@ -457,30 +610,185 @@ def make_training_configs(env):
             "lr": 3e-4, "warmup_ratio": 0.01, "weight_decay": 0.1,
             "betas": (0.9, 0.95), "epochs": 2, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 512, "grad_accum_steps": accum,
+            "patience": 1, "ckpt_every": 2000, "lr_finder": True,
         },
         "domain": {
             "lr": 1e-4, "warmup_ratio": 0.05, "weight_decay": 0.1,
             "betas": (0.9, 0.95), "epochs": 3, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 512, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 2000, "lr_finder": True,
         },
         "instruction": {
             "lr": 5e-5, "warmup_ratio": 0.05, "weight_decay": 0.05,
             "betas": (0.9, 0.99), "epochs": 2, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 512, "grad_accum_steps": accum,
+            "patience": 1, "ckpt_every": 1000, "lr_finder": True,
         },
         "interview": {
             "lr": 2e-5, "warmup_ratio": 0.1, "weight_decay": 0.05,
             "betas": (0.9, 0.99), "epochs": 3, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 768, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
         },
         "evaluator": {
             "lr": 2e-5, "warmup_ratio": 0.1, "weight_decay": 0.05,
             "betas": (0.9, 0.99), "epochs": 4, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 768, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
         },
         "followup": {
             "lr": 2e-5, "warmup_ratio": 0.1, "weight_decay": 0.05,
             "betas": (0.9, 0.99), "epochs": 3, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 512, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
         },
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# Auto-tuning: Learning Rate Finder (LR range test)
+# ─────────────────────────────────────────────────────────────
+
+@torch.no_grad()
+def _lr_smoke_loss(model, batch, device, use_fp16):
+    """One forward pass for the LR finder — no backward, no graph kept."""
+    input_ids = batch["input_ids"].to(device)
+    labels = batch["labels"].to(device)
+    with torch.amp.autocast("cuda", enabled=use_fp16):
+        result = model(input_ids=input_ids, labels=labels)
+    return result["loss"].item()
+
+
+def find_learning_rate(model, dataloader, device, optimizer_factory, config,
+                       lr_min=1e-6, lr_max=1e-2, num_steps=40, use_fp16=False):
+    """Run a classic LR range test and return the suggested peak LR.
+
+    Ramps LR exponentially from lr_min to lr_max over `num_steps` optimizer
+    steps, tracking smoothed loss. Picks the LR one decade below the point
+    where loss starts climbing (default heuristic: 0.5 * lr_at_min_loss).
+    """
+    model.train()
+    print("\n  [auto] Running LR range test...")
+    if use_fp16:
+        scaler = _make_scaler(True)
+    else:
+        scaler = None
+
+    it = iter(dataloader)
+    opt = optimizer_factory(lr=lr_min)
+    losses = []
+    lrs = []
+    best_loss = float("inf")
+    best_lr = lr_min
+
+    # Reset: rerun from scratch each step with fresh gradients
+    for step in range(num_steps):
+        try:
+            batch = next(it)
+        except StopIteration:
+            it = iter(dataloader)
+            batch = next(it)
+        lr = lr_min * (lr_max / lr_min) ** (step / max(1, num_steps - 1))
+        for g in opt.param_groups:
+            g["lr"] = lr
+
+        opt.zero_grad()
+        with torch.amp.autocast("cuda", enabled=use_fp16):
+            result = model(input_ids=batch["input_ids"].to(device),
+                           labels=batch["labels"].to(device))
+            loss = result["loss"]
+        if use_fp16 and scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        if use_fp16 and scaler is not None:
+            scaler.unscale_(opt)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if use_fp16 and scaler is not None:
+            scaler.step(opt)
+            scaler.update()
+        else:
+            opt.step()
+
+        l = loss.item()
+        losses.append(l)
+        lrs.append(lr)
+        if l < best_loss:
+            best_loss = l
+            best_lr = lr
+        if step % 10 == 0:
+            print(f"    lr={lr:.2e}  loss={l:.4f}")
+
+    # Heuristic: pick LR at best loss, divided by a safety factor ~3
+    suggested = max(lr_min, best_lr / 3.0)
+    print(f"  [auto] LR finder done: best_loss={best_loss:.4f} at lr={best_lr:.2e} -> suggest {suggested:.2e}")
+    # Respect the stage's configured peak as an upper bound
+    if suggested > config["lr"]:
+        suggested = config["lr"]
+        print(f"  [auto] Capped to configured peak LR {suggested:.2e}")
+    return suggested
+
+
+# ─────────────────────────────────────────────────────────────
+# Auto-tuning: Batch-size profiler (memory-aware)
+# ─────────────────────────────────────────────────────────────
+
+def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
+                       max_batch=64, trials=2):
+    """Try larger per-GPU batch sizes and return the largest that fits memory.
+
+    Runs forward+backward on small subsets with no optimizer step. Returns a
+    recommended per-GPU batch size (power-of-2 >= base_batch). On CPU or when
+    CUDA is unavailable, returns base_batch unchanged.
+    """
+    if not torch.cuda.is_available() or len(dataset) == 0:
+        return base_batch
+    print(f"\n  [auto] Profiling batch size (base={base_batch})...")
+    model.train()
+
+    def _try(bs):
+        # Build one mini-batch of exactly `bs` rows
+        idx = torch.randint(len(dataset), (min(bs, len(dataset)),)).tolist()
+        batch = {k: v.unsqueeze(0) for k, v in dataset[0].items()}  # shape reference
+        # Real batch collate:
+        rows = [dataset[i] for i in idx]
+        batch = {
+            "input_ids": torch.stack([r["input_ids"] for r in rows]).to(device),
+            "labels": torch.stack([r["labels"] for r in rows]).to(device),
+        }
+        try:
+            opt = torch.optim.SGD(model.parameters(), lr=1e-6)
+            opt.zero_grad()
+            with torch.amp.autocast("cuda", enabled=use_fp16):
+                loss = model(input_ids=batch["input_ids"], labels=batch["labels"])["loss"]
+            if use_fp16:
+                scaler = _make_scaler(True)
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                loss.backward()
+                opt.step()
+            torch.cuda.synchronize()
+            return True
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            return False
+        except RuntimeError:
+            torch.cuda.empty_cache()
+            return False
+
+    best = base_batch
+    bs = base_batch
+    while bs <= max_batch:
+        ok = all(_try(bs) for _ in range(trials))
+        if ok:
+            best = bs
+            print(f"    batch {bs}: OK")
+            bs *= 2
+        else:
+            print(f"    batch {bs}: OOM — stopping")
+            break
+    print(f"  [auto] Profiling done: recommended per-GPU batch = {best}")
+    return best
