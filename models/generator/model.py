@@ -252,6 +252,7 @@ class InterviewGenerator(nn.Module):
         self,
         input_ids: torch.Tensor,
         labels: torch.Tensor = None,
+        return_logits: bool = True,
     ) -> dict:
         """
         Forward pass.
@@ -259,9 +260,15 @@ class InterviewGenerator(nn.Module):
         Args:
             input_ids: (B, T) token IDs
             labels: (B, T) target IDs for language modeling (shifted right)
+            return_logits: when False, do NOT return the logits tensor.
+                Under DataParallel the returned tensors are gathered onto GPU 0,
+                and a (B, T, vocab) logits tensor for the full multi-GPU batch
+                can blow memory. Training/eval only need the loss, so callers
+                pass return_logits=False to avoid the gather.
 
         Returns:
-            dict with 'logits' (B, T, vocab_size) and optionally 'loss'
+            dict with 'logits' (B, T, vocab_size) [if return_logits] and
+            optionally 'loss'
         """
         B, T = input_ids.shape
         mask = (input_ids != self.pad_id).long()
@@ -278,7 +285,9 @@ class InterviewGenerator(nn.Module):
         x = self.norm(x)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
-        result = {"logits": logits}
+        result = {}
+        if return_logits:
+            result["logits"] = logits
 
         # Compute loss if labels provided
         if labels is not None:

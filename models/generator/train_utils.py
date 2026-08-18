@@ -655,8 +655,11 @@ def _lr_smoke_loss(model, batch, device, use_fp16):
     input_ids = batch["input_ids"].to(device)
     labels = batch["labels"].to(device)
     with torch.amp.autocast("cuda", enabled=use_fp16):
-        result = model(input_ids=input_ids, labels=labels)
-    return result["loss"].item()
+        result = model(input_ids=input_ids, labels=labels, return_logits=False)
+    loss = result["loss"]
+    if getattr(loss, "dim", lambda: 0)() > 0:
+        loss = loss.mean()  # DataParallel returns one loss per GPU
+    return loss.item()
 
 
 def find_learning_rate(model, dataloader, device, optimizer_factory, config,
@@ -695,8 +698,10 @@ def find_learning_rate(model, dataloader, device, optimizer_factory, config,
         opt.zero_grad()
         with torch.amp.autocast("cuda", enabled=use_fp16):
             result = model(input_ids=batch["input_ids"].to(device),
-                           labels=batch["labels"].to(device))
+                           labels=batch["labels"].to(device), return_logits=False)
             loss = result["loss"]
+            if getattr(loss, "dim", lambda: 0)() > 0:
+                loss = loss.mean()  # DataParallel returns one loss per GPU
         if use_fp16 and scaler is not None:
             scaler.scale(loss).backward()
         else:
@@ -760,7 +765,10 @@ def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
             opt = torch.optim.SGD(model.parameters(), lr=1e-6)
             opt.zero_grad()
             with torch.amp.autocast("cuda", enabled=use_fp16):
-                loss = model(input_ids=batch["input_ids"], labels=batch["labels"])["loss"]
+                loss = model(input_ids=batch["input_ids"], labels=batch["labels"],
+                             return_logits=False)["loss"]
+            if getattr(loss, "dim", lambda: 0)() > 0:
+                loss = loss.mean()
             if use_fp16:
                 scaler = _make_scaler(True)
                 scaler.scale(loss).backward()

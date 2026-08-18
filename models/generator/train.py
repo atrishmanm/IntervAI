@@ -316,8 +316,10 @@ def run_stage(stage, config):
     if config.get("lr_finder", True) and torch.cuda.is_available():
         snap = _snapshot()
         try:
+            # Pass the WRAPPED model: the loader batch (per-GPU x NUM_GPUS)
+            # must be sharded across GPUs, otherwise one GPU gets the full batch.
             lr = find_learning_rate(
-                unwrap_model(model), train_loader, DEVICE, _optimizer, config,
+                model, train_loader, DEVICE, _optimizer, config,
                 use_fp16=USE_FP16,
             )
         finally:
