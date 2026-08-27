@@ -536,12 +536,9 @@ def load_checkpoint(path, model, optimizer=None, scheduler=None, scaler=None):
     sd = checkpoint["model_state_dict"]
 
     target = unwrap_model(model)
-    # Strip 'module.' prefix if present in saved dict but target is plain
-    if not isinstance(model, nn.DataParallel) and any(k.startswith("module.") for k in sd):
+    # Always strip 'module.' prefix — we always load into unwrap_model(model)
+    if any(k.startswith("module.") for k in sd):
         sd = {k[len("module."):]: v for k, v in sd.items()}
-    # Add prefix if saved plain but target wrapped
-    elif isinstance(model, nn.DataParallel) and not any(k.startswith("module.") for k in sd):
-        sd = {"module." + k: v for k, v in sd.items()}
 
     # Shape-compatibility guard: different model sizes (small/medium/large)
     # store different tensor shapes; silently loading would corrupt the model.

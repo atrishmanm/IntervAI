@@ -222,7 +222,11 @@ def load_model_for_stage(stage, vocab_size):
         if init_path.exists():
             print(f"  Init weights from: {init_path}")
             ckpt = torch.load(init_path, map_location="cpu", weights_only=False)
-            model.load_state_dict(ckpt["model_state_dict"])
+            sd = ckpt["model_state_dict"]
+            # Strip 'module.' prefix from DataParallel checkpoints
+            if any(k.startswith("module.") for k in sd):
+                sd = {k[len("module."):]: v for k, v in sd.items()}
+            model.load_state_dict(sd)
         else:
             print(f"  WARN: init checkpoint {init_path} missing — starting fresh.")
     return model
