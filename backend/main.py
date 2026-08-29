@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backend.inference_service import models_ready
+from backend.model_service import get_model_service
 from orchestrator.state_machine import InterviewState, orchestrator
 
 app = FastAPI(title="AI Interview Prep V3", version="3.0.0")
@@ -56,9 +57,29 @@ async def serve_frontend():
 @app.get("/api/status")
 async def get_status():
     status = models_ready()
+    
+    # Check trained model status
+    try:
+        service = get_model_service()
+        trained_models = {
+            "pretrained": (ROOT / "models" / "generator" / "saved" / "pretrained.pt").exists(),
+            "domain": (ROOT / "models" / "generator" / "saved" / "domain_tuned.pt").exists(),
+            "instruction": (ROOT / "models" / "generator" / "saved" / "instruction_tuned.pt").exists(),
+            "interview": (ROOT / "models" / "generator" / "saved" / "interview_tuned.pt").exists(),
+            "evaluator": (ROOT / "models" / "generator" / "saved" / "evaluator.pt").exists(),
+            "followup": (ROOT / "models" / "generator" / "saved" / "final_model.pt").exists(),
+        }
+        tokenizer = (ROOT / "tokenizer" / "saved" / "tokenizer.json").exists()
+    except Exception:
+        trained_models = {}
+        tokenizer = False
+    
     return {
         **status,
         "ready": status["question_bank"] and status["tfidf_index"],
+        "trained_models": trained_models,
+        "tokenizer": tokenizer,
+        "models_loaded": sum(trained_models.values()),
     }
 
 

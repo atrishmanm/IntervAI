@@ -77,6 +77,18 @@ class Orchestrator:
     def __init__(self):
         from orchestrator.candidate_state import CandidateStateManager
         self._candidates = CandidateStateManager()
+        self._pipeline = None
+
+    def _get_pipeline(self):
+        """Lazy-load the inference pipeline."""
+        if self._pipeline is None:
+            try:
+                from backend.inference_pipeline import create_pipeline
+                self._pipeline = create_pipeline(use_models=True)
+            except Exception as e:
+                print(f"  WARN: Pipeline init failed ({e}), using question bank only")
+                self._pipeline = create_pipeline(use_models=False)
+        return self._pipeline
 
     def start_session(self, state: InterviewState) -> dict:
         """Start a session. Returns the first question."""
@@ -84,18 +96,16 @@ class Orchestrator:
         # Register candidate state (adapts difficulty + concepts)
         cand = self._candidates.get_or_create(state.session_id)
 
-        # Pick a random type to start with
+        # Generate question using pipeline (model or bank)
+        pipeline = self._get_pipeline()
         q_type = random.choice(QUESTION_TYPES)
-        q = get_random_question(q_type=q_type, difficulty=cand.current_difficulty)
-        if q is None:
-            q = get_random_question(q_type=q_type)
-        if q is None:
-            q = get_random_question()
-        if q is None:
-            return {
-                "type": "error",
-                "message": "Could not load questions. Please run the training pipeline first.",
-            }
+        q = pipeline.generate_question(
+            difficulty=cand.current_difficulty,
+            question_type=q_type,
+        )
+
+        # Add id field for tracking
+        q["id"] = q.get("id", f"gen_{state.session_id}_{state.questions_asked}")
 
         state.current_question = q
         state.asked_ids.append(q["id"])
@@ -108,7 +118,8 @@ class Orchestrator:
             "question_type": q["type"],
             "topic": q.get("topic", "General"),
             "difficulty": q.get("difficulty", "medium"),
-            "question_text": q["question"],
+            "question_text": q["question_text"],
+            "source": q.get("source", "bank"),
         }
 
     def process_answer(self, state: InterviewState, student_answer: str) -> dict:
@@ -122,32 +133,31 @@ class Orchestrator:
 
         cand = self._candidates.get_or_create(state.session_id)
 
-        # Analyze the answer
-        from backend.inference_service import analyze_answer
-        report = analyze_answer(
-            student_answer=student_answer,
-            reference_answer=q.get("reference_answer", ""),
+        # Evaluate answer using pipeline (evaluator model + semantic scorer)
+        pipeline = self._get_pipeline()
+        report = pipeline.evaluate_answer(
+            question=q["question_text"],
+            answer=student_answer,
+            reference=q.get("reference_answer", ""),
             key_phrases=q.get("key_phrases", []),
-            question_type=q.get("type", "theoretical"),
-            expert_text=q.get("original_explanation", ""),
         )
 
         state.score_total += report["score"]
 
-        # Save to history (report format used by frontend + panel report)
+        # Save to history
         state.history.append({
-            "question": q["question"],
+            "question": q["question_text"],
             "question_type": q["type"],
             "candidate_answer": student_answer,
             "score": report["score"],
             "reference_answer": q.get("reference_answer", ""),
-            "expert_text": q.get("original_explanation", ""),
-            "missing_concepts": report.get("missing_concepts", []),
             "feedback": report.get("feedback", ""),
             "concepts_covered": report.get("covered_concepts", []),
+            "missing_concepts": report.get("missing_concepts", []),
+            "model_used": report.get("model_used", "unknown"),
         })
 
-        # Update candidate concept state (normalized 0-1)
+        # Update candidate concept state
         cand.update_from_answer(
             concept=q.get("topic", "General"),
             score=report["score"] / 100.0,
@@ -173,8 +183,27 @@ class Orchestrator:
                 },
             }
 
-        # Pick next question — use candidate state to choose concept/difficulty
-        next_q = self._pick_next_question(state, cand)
+        # Pick next question — try follow-up first, then fallback
+        followup = pipeline.generate_followup(
+            question=q["question_text"],
+            answer=student_answer,
+            evaluation=report,
+        )
+
+        if followup.get("question_text"):
+            next_q = {
+                "id": f"followup_{state.session_id}_{state.questions_asked}",
+                "type": "followup",
+                "topic": q.get("topic", "General"),
+                "difficulty": q.get("difficulty", "medium"),
+                "question_text": followup["question_text"],
+                "key_phrases": [],
+                "reference_answer": "",
+                "source": "model",
+            }
+        else:
+            next_q = self._pick_next_question(state, cand)
+
         if next_q is None:
             state.finished = True
             state.report = self._build_panel_report(state, cand)
@@ -201,7 +230,8 @@ class Orchestrator:
                 "question_type": next_q["type"],
                 "topic": next_q.get("topic", "General"),
                 "difficulty": next_q.get("difficulty", "medium"),
-                "question_text": next_q["question"],
+                "question_text": next_q["question_text"],
+                "source": next_q.get("source", "bank"),
             },
         }
 
@@ -211,21 +241,19 @@ class Orchestrator:
         type_idx = state.questions_asked % len(QUESTION_TYPES)
         next_type = QUESTION_TYPES[type_idx]
 
-        # Prefer questions on weak concepts (concept graph suggestion)
+        # Use pipeline for question generation
+        pipeline = self._get_pipeline()
         suggested = cand.suggest_next_concept(self._candidates.concept_graph)
-        q = None
-        if suggested:
-            q = self._get_question_by_topic(suggested, state.asked_ids,
-                                            cand.current_difficulty)
-        if q is None:
-            q = get_random_question(exclude_ids=state.asked_ids,
-                                    q_type=next_type,
-                                    difficulty=cand.current_difficulty)
-        if q is None:
-            q = get_random_question(exclude_ids=state.asked_ids, q_type=next_type)
-        if q is None:
-            q = get_random_question(exclude_ids=state.asked_ids)
-        return q
+        q = pipeline.generate_question(
+            topic=suggested,
+            difficulty=cand.current_difficulty,
+            question_type=next_type,
+        )
+
+        if q:
+            q["id"] = q.get("id", f"gen_{state.session_id}_{state.questions_asked}")
+            return q
+        return None
 
     @staticmethod
     def _get_question_by_topic(topic, exclude_ids, difficulty):
