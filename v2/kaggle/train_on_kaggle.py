@@ -49,12 +49,13 @@ from pathlib import Path
 # ── 0. Clone the repo if not already present ──────────────────
 WORK = Path("/kaggle/working")
 REPO = WORK / "IntervAI"
+V2 = REPO / "v2"
 if not REPO.exists():
     print("Cloning IntervAI repo...")
     os.system("git clone https://github.com/atrishmanm/IntervAI.git /kaggle/working/IntervAI")
 
-sys.path.insert(0, str(REPO))
-os.chdir(REPO)
+sys.path.insert(0, str(V2))
+os.chdir(V2)
 
 # ── 1. Environment summary ────────────────────────────────────
 from env_config import ENV, ROOT, SAVE_ROOT, MODEL_SIZE, print_env_summary
@@ -68,7 +69,7 @@ def _pip(*pkgs):
 _pip("torch", "tokenizers", "numpy", "scikit-learn", "tqdm", "safetensors")
 
 # ── 3. Copy your dataset into data/raw ────────────────────────
-RAW_DIR = REPO / "data" / "raw"
+RAW_DIR = V2 / "data" / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 def copy_dataset_into_raw():
@@ -147,13 +148,13 @@ copy_dataset_into_raw()
 
 # ── 4. Download additional datasets (evaluator + pretrain) ────
 print("\nDownloading additional datasets...")
-EVAL_DIR = REPO / "data" / "evaluator"
-PRETRAIN_DIR = REPO / "data" / "pretrain"
+EVAL_DIR = V2 / "data" / "evaluator"
+PRETRAIN_DIR = V2 / "data" / "pretrain"
 EVAL_DIR.mkdir(parents=True, exist_ok=True)
 PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Download evaluator scoring datasets (only if not already present)
-eval_script = REPO / "scripts" / "download_evaluator_data.py"
+eval_script = V2 / "scripts" / "download_evaluator_data.py"
 if eval_script.exists() and not any(EVAL_DIR.glob("*.jsonl")):
     print("  Downloading evaluator scoring datasets...")
     rc = os.system(f"{sys.executable} {eval_script}")
@@ -163,7 +164,7 @@ else:
     print("  Evaluator data already present, skipping download.")
 
 # Download pretrain code data (only if not already present)
-pretrain_script = REPO / "scripts" / "download_pretrain_data.py"
+pretrain_script = V2 / "scripts" / "download_pretrain_data.py"
 if pretrain_script.exists() and not any(PRETRAIN_DIR.glob("*.jsonl")):
     print("  Downloading pretrain code datasets (Nemotron + FineWeb-Edu)...")
     rc = os.system(f"{sys.executable} {pretrain_script}")
@@ -173,7 +174,7 @@ else:
     print("  Pretrain data already present, skipping download.")
 
 # ── 5. Train tokenizer (not in repo — gitignored) ─────────────
-tok_path = REPO / "tokenizer" / "saved" / "tokenizer.json"
+tok_path = V2 / "tokenizer" / "saved" / "tokenizer.json"
 if not tok_path.exists():
     print("\nTraining tokenizer on Kaggle data (16K vocab)...")
     rc = os.system(f"{sys.executable} tokenizer/train_tokenizer.py")
@@ -190,7 +191,7 @@ if stage != "all":
     STAGES = [stage]
 
 # Progress tracking (crash-safe)
-PROGRESS_FILE = REPO / "results" / "kaggle_progress.json"
+PROGRESS_FILE = V2 / "results" / "kaggle_progress.json"
 PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
 progress = {"stages_completed": [], "total_time_min": 0}
 if PROGRESS_FILE.exists():
