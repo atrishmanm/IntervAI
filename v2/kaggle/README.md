@@ -1,0 +1,104 @@
+# INTERVUE — Running Training on Kaggle
+
+This guide covers the **only** realistic way to train the heavy stages
+(pretrain, domain, instruction) given the local GPU is a GTX 1650 with 4GB VRAM.
+
+Local training is feasible only for stages with small data (interview/evaluator/followup
+with `--limit` for smoke tests). Everything else: **use Kaggle**.
+
+---
+
+## 1. Prepare the data as a Kaggle Dataset
+
+1. Upload your real data files to Kaggle as a Dataset (or use the API):
+
+   ```bash
+   kaggle datasets init -p data/raw
+   # edit dataset-metadata.json (slug, title)
+   kaggle datasets create -p data/raw
+   ```
+
+2. Files land in `/kaggle/input/<dataset-slug>/...`. The unified trainer
+   (`models/generator/train.py`) scans `/kaggle/input` recursively, so it finds
+   them automatically by filename.
+
+---
+
+## 2. Create the notebook
+
+1. **New Notebook** → Settings → **Accelerator: GPU T4 x2** (or P100).
+2. **Add Data** → your uploaded dataset from step 1.
+3. In the first cell:
+
+   ```python
+   !git clone https://github.com/<YOUR_USER>/IntervAI.git /kaggle/working/IntervAI
+   !python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all
+   ```
+
+   (Or open `kaggle/train_on_kaggle.py` and run it directly in the notebook.)
+
+---
+
+## 3. What happens (research-grade pipeline)
+
+- `env_config.py` detects `/kaggle/working` → **batch=16/GPU, accum=4, FP16,
+  large model (24.3M)**. On **2x T4** the model is wrapped in `DataParallel` so
+  both GPUs are used (global batch = 16 × 2 GPUs × 4 accum = 128).
+- Per stage, the trainer **auto-tunes**:
+  - **Batch-size profiler** — tries larger per-GPU batches until OOM, picks the max.
+  - **LR range test** — ramps LR exponentially, picks the best peak LR.
+  - **Early stopping** with best-checkpoint tracking.
+- Metrics: val loss, perplexity, **token accuracy + top-5 accuracy**, logged as
+  JSON to `results/<stage>.log`.
+- **Crash-safe checkpoints**: a `<stage>.resume` checkpoint is written every
+  `ckpt_every` optimizer steps (plus FP16 scaler state), so a Ctrl-C / session
+  timeout loses at most ~2000 steps, not a full epoch.
+- Curriculum fixes baked in: full-content SHA256 dedup (no more 200-char bug),
+  evaluator trains on **code feedback** data, and followup fine-tunes from
+  `interview_tuned.pt` (no catastrophic forgetting).
+- Override model size: `INTERVUE_MODEL=small|medium|large` (default on T4 = large).
+
+---
+
+## 4. Downloading results
+
+After training, download the checkpoints back to your laptop:
+
+```python
+from IPython.display import FileLink
+FileLink('/kaggle/working/IntervAI/models/generator/saved/final_model.pt')
+```
+
+Or use the Kaggle API:
+```bash
+kaggle kernels output <your-kernel-slug> -p models/generator/saved
+```
+
+Copy them into `models/generator/saved/` locally.
+
+---
+
+## 5. Local smoke test (before any Kaggle run)
+
+Verify the pipeline works end-to-end on your laptop first (CPU is fine for a few samples):
+
+```bash
+python models/generator/train.py --stage pretrain --limit 20
+python models/generator/train.py --stage interview --limit 20
+```
+
+These use batch=1, no FP16, and finish in ~1 minute each (auto-tuning is
+skipped on CPU).
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `No usable data found` | Data not mounted — check `/kaggle/input` contents, re-add the dataset |
+| OOM on Kaggle | Batch profiler auto-shrinks to fit; if still OOM set `INTERVUE_MODEL=medium` |
+| Session timeout | Resume is automatic — just rerun the script (mid-epoch resume saves ~2000 steps) |
+| `Tokenizer not found` | Run the tokenizer cell first, or upload your locally-trained `tokenizer.json` |
+| Repo clone fails | `github.com/<YOUR_USER>` — replace with your actual repo URL |
+| Checkpoint size mismatch after `INTERVUE_MODEL` change | Different model sizes store different shapes — retrain or set the same size as before |
