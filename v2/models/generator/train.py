@@ -66,15 +66,20 @@ STAGE_DATA = {
         "data/raw/codesearchnet.jsonl",
         "data/raw/cruxeval/cruxeval.jsonl",
         "data/raw/fineweb_edu_sample.jsonl",
+        "data/raw/openwebtext_sample.jsonl",
     ],
     "domain": [
         "data/raw/conversations.jsonl",
         "data/raw/opencodeinstruct.jsonl",
         "data/raw/oasst_coding.jsonl",
+        "data/raw/code_contests_sample.jsonl",
     ],
     "instruction": [
         "data/raw/codealpaca.jsonl",
         "data/raw/opencodeinstruct.jsonl",
+        "data/raw/slimorca_sample.jsonl",
+        "data/raw/dolly_15k.jsonl",
+        "data/raw/smoltalk_sample.jsonl",
     ],
     "interview": [
         "data/raw/conversations.jsonl",
