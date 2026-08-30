@@ -36,30 +36,30 @@ def save_jsonl(records, filename):
 
 
 def download_nemotron_code(max_samples=100000):
-    """Download and sample from Nemotron-Pretraining-Code-v1."""
-    print(f"\n[1/2] Nemotron Code (sampling {max_samples} examples)...")
+    """Download and sample from codeparrot/github-code (open alternative to Nemotron)."""
+    print(f"\n[1/2] GitHub Code (sampling {max_samples} examples)...")
     try:
         from datasets import load_dataset
-        ds = load_dataset("nvidia/Nemotron-Pretraining-Code-v1", split="train",
+        # codeparrot/github-code is open (no auth needed), contains 6.6M code samples
+        ds = load_dataset("codeparrot/github-code", split="train",
                           streaming=True, trust_remote_code=True)
         records = []
         for i, row in enumerate(ds):
             if i >= max_samples:
                 break
-            content = row.get("content", "") or row.get("text", "")
-            lang = row.get("language", "") or row.get("lang", "")
+            content = row.get("code", "") or row.get("content", "") or row.get("text", "")
+            lang = row.get("language", "") or row.get("repo_name", "")
             if content and len(content.strip()) > 100:
                 records.append({
                     "content": content.strip(),
                     "language": lang,
-                    "source": "nemotron_code",
+                    "source": "github_code",
                 })
             if (i + 1) % 10000 == 0:
                 print(f"    Processed {i+1} examples, kept {len(records)}")
-        return save_jsonl(records, "nemotron_code_sample.jsonl")
+        return save_jsonl(records, "github_code_sample.jsonl")
     except Exception as e:
-        print(f"  [ERROR] Nemotron Code download failed: {e}")
-        print("  [INFO] This dataset is large (~16GB). May need manual download.")
+        print(f"  [ERROR] GitHub Code download failed: {e}")
         return 0
 
 

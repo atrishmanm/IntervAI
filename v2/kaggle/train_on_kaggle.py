@@ -148,14 +148,9 @@ copy_dataset_into_raw()
 
 # ── 4. Download additional datasets (evaluator + pretrain) ────
 print("\nDownloading additional datasets...")
-EVAL_DIR = V2 / "data" / "evaluator"
-PRETRAIN_DIR = V2 / "data" / "pretrain"
-EVAL_DIR.mkdir(parents=True, exist_ok=True)
-PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
-
-# Download evaluator scoring datasets (only if not already present)
+# Downloads go to data/raw/ (same as the raw data copied above)
 eval_script = V2 / "scripts" / "download_evaluator_data.py"
-if eval_script.exists() and not any(EVAL_DIR.glob("*.jsonl")):
+if eval_script.exists() and not any(V2.glob("data/raw/mohlerasag_hf.jsonl")):
     print("  Downloading evaluator scoring datasets...")
     rc = os.system(f"{sys.executable} {eval_script}")
     if rc != 0:
@@ -163,10 +158,9 @@ if eval_script.exists() and not any(EVAL_DIR.glob("*.jsonl")):
 else:
     print("  Evaluator data already present, skipping download.")
 
-# Download pretrain code data (only if not already present)
 pretrain_script = V2 / "scripts" / "download_pretrain_data.py"
-if pretrain_script.exists() and not any(PRETRAIN_DIR.glob("*.jsonl")):
-    print("  Downloading pretrain code datasets (Nemotron + FineWeb-Edu)...")
+if pretrain_script.exists() and not any(V2.glob("data/raw/fineweb_edu_sample.jsonl")):
+    print("  Downloading pretrain data (FineWeb-Edu)...")
     rc = os.system(f"{sys.executable} {pretrain_script}")
     if rc != 0:
         print("  WARN: Pretrain data download failed — pretrain stage may skip files.")

@@ -90,13 +90,22 @@ def download_scientsbank():
     try:
         from datasets import load_dataset
         ds = load_dataset("nkazi/SciEntsBank", trust_remote_code=True)
+        # Debug: show available splits and column names
+        for split_name in ds.keys():
+            cols = ds[split_name].column_names
+            print(f"    split '{split_name}': columns={cols}")
+            break  # show first split only
+
         records = []
-        # Process train + test splits
         for split_name in ds.keys():
             for row in ds[split_name]:
-                q = row.get("question", "") or row.get("sentence1", "")
-                sa = row.get("answer", "") or row.get("sentence2", "")
-                label = row.get("label", "") or row.get("gold_label", "")
+                # Try multiple column name patterns (dataset uses different naming)
+                q = (row.get("question") or row.get("Sentence1") or
+                     row.get("sentence1") or row.get("prompt") or "")
+                sa = (row.get("answer") or row.get("Sentence2") or
+                      row.get("sentence2") or row.get("student_answer") or "")
+                label = (row.get("label") or row.get("gold_label") or
+                         row.get("Gold_label") or "")
 
                 # Convert entailment labels to numeric scores
                 label_map = {
@@ -104,12 +113,13 @@ def download_scientsbank():
                     "Incorrect": 0.0,
                     "Partially_correct/incomplete": 2.5,
                     "Correct": 5.0,
-                    # Also handle numeric labels
+                    "Entailment": 5.0,
+                    "Contradiction": 0.0,
+                    "Neutral": 2.5,
                 }
                 if isinstance(label, str):
                     score = label_map.get(label, 2.5)
                 elif isinstance(label, (int, float)):
-                    # 5-way: 0-4 -> 0-5 scale; 3-way/2-way: already small
                     if label >= 4:
                         score = 5.0
                     elif label >= 2:
@@ -131,6 +141,7 @@ def download_scientsbank():
         return save_jsonl(records, "scientsbank.jsonl")
     except Exception as e:
         print(f"  [ERROR] SciEntsBank download failed: {e}")
+        import traceback; traceback.print_exc()
         return 0
 
 
@@ -144,18 +155,30 @@ def download_beetle():
     try:
         from datasets import load_dataset
         ds = load_dataset("nkazi/Beetle", trust_remote_code=True)
+        # Debug: show available splits and column names
+        for split_name in ds.keys():
+            cols = ds[split_name].column_names
+            print(f"    split '{split_name}': columns={cols}")
+            break
+
         records = []
         for split_name in ds.keys():
             for row in ds[split_name]:
-                q = row.get("question", "") or row.get("sentence1", "")
-                sa = row.get("answer", "") or row.get("sentence2", "")
-                label = row.get("label", "") or row.get("gold_label", "")
+                q = (row.get("question") or row.get("Sentence1") or
+                     row.get("sentence1") or row.get("prompt") or "")
+                sa = (row.get("answer") or row.get("Sentence2") or
+                      row.get("sentence2") or row.get("student_answer") or "")
+                label = (row.get("label") or row.get("gold_label") or
+                         row.get("Gold_label") or "")
 
                 label_map = {
                     "Contradictory": 0.0,
                     "Incorrect": 0.0,
                     "Partially_correct/incomplete": 2.5,
                     "Correct": 5.0,
+                    "Entailment": 5.0,
+                    "Contradiction": 0.0,
+                    "Neutral": 2.5,
                 }
                 if isinstance(label, str):
                     score = label_map.get(label, 2.5)
@@ -181,6 +204,7 @@ def download_beetle():
         return save_jsonl(records, "beetle.jsonl")
     except Exception as e:
         print(f"  [ERROR] Beetle download failed: {e}")
+        import traceback; traceback.print_exc()
         return 0
 
 

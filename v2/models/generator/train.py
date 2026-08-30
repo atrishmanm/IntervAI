@@ -65,8 +65,7 @@ STAGE_DATA = {
         "data/raw/starcoder_large.jsonl",
         "data/raw/codesearchnet.jsonl",
         "data/raw/cruxeval/cruxeval.jsonl",
-        "data/pretrain/nemotron_code_100k.jsonl",
-        "data/pretrain/fineweb_edu_50k.jsonl",
+        "data/raw/fineweb_edu_sample.jsonl",
     ],
     "domain": [
         "data/raw/conversations.jsonl",
@@ -82,11 +81,10 @@ STAGE_DATA = {
         "data/raw/opencodeinstruct.jsonl",
     ],
     "evaluator": [
-        "data/evaluator/mohler_asag.jsonl",
-        "data/evaluator/scientsbank.jsonl",
-        "data/evaluator/beetle.jsonl",
-        "data/evaluator/asap_aes.jsonl",
-        "data/evaluator/asap_sas.jsonl",
+        "data/raw/mohlerasag_hf.jsonl",
+        "data/raw/scientsbank.jsonl",
+        "data/raw/beetle.jsonl",
+        "data/raw/asap_aes.jsonl",
     ],
     "followup": [
         "data/raw/oasst_coding.jsonl",
