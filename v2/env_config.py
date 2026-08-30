@@ -28,7 +28,7 @@ IS_COLAB = Path("/content").exists()
 
 if IS_KAGGLE:
     ENV = "kaggle"
-    ROOT = Path("/kaggle/working/IntervAI")
+    ROOT = Path("/kaggle/working/IntervAI/v2")
     DATA_DIR = Path("/kaggle/input")  # datasets mounted here by Kaggle
     SAVE_ROOT = ROOT / "models" / "generator" / "saved"
     RESULTS_DIR = Path("/kaggle/working")
