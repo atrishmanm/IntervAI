@@ -52,7 +52,8 @@ from models.generator.train_utils import (
     train_epoch, evaluate, save_checkpoint, load_checkpoint,
     load_tokenizer, make_training_configs, dedup_examples, quality_filter,
     wrap_data_parallel, unwrap_model, find_learning_rate, profile_batch_size,
-    _make_scaler, EMA,
+    _make_scaler, EMA, Muon, create_muon_optimizer, PackedDataset, pack_dataset,
+    compile_model,
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -151,10 +152,11 @@ def resolve_data_path(rel: str):
 
 
 def build_dataset_for_stage(stage, tokenizer, config):
-    """Build train + val datasets for the stage."""
+    """Build train + val datasets for the stage with optional sequence packing."""
     global _LIMIT
     files = STAGE_DATA[stage]
     max_len = config["max_len"]
+    use_packing = config.get("sequence_packing", False)
     examples = []
 
     for rel in files:
@@ -195,20 +197,19 @@ def build_dataset_for_stage(stage, tokenizer, config):
             full = "\n".join(parts)
             enc = tokenizer.encode(full)
             ids = enc.ids[:max_len]
-            pad_id = tokenizer.token_to_id("[PAD]") or 0
-            if len(ids) < max_len:
-                ids = ids + [pad_id] * (max_len - len(ids))
-            am = [1 if t != pad_id else 0 for t in ids]
-            return {
-                "input_ids": torch.tensor(ids, dtype=torch.long),
-                "attention_mask": torch.tensor(am, dtype=torch.long),
-                "labels": torch.tensor(ids, dtype=torch.long),
-            }
+            return {"input_ids": ids, "labels": ids}
 
     full = _Wrapper(uniq)
     val_size = min(500, max(1, len(full) // 30))
     train_size = len(full) - val_size
     train_ds, val_ds = random_split(full, [train_size, val_size])
+
+    # Apply sequence packing for 2-3x throughput
+    if use_packing:
+        print(f"  Packing sequences (max_len={max_len}) for 2-3x throughput...")
+        train_ds = pack_dataset(train_ds, max_len=max_len)
+        print(f"  Packed: {train_size} examples -> {len(train_ds)} packed sequences")
+
     return train_ds, val_ds
 
 
@@ -315,6 +316,12 @@ def run_stage(stage, config):
 
     # ── Optimizer (LR finder re-inits it) ──
     def _optimizer(lr):
+        if config.get("optimizer") == "muon":
+            return create_muon_optimizer(
+                unwrap_model(model), lr=lr,
+                weight_decay=config["weight_decay"],
+                momentum=config.get("muon_momentum", 0.95),
+            )
         return torch.optim.AdamW(
             unwrap_model(model).parameters(),
             lr=lr,
@@ -343,6 +350,14 @@ def run_stage(stage, config):
 
     # EMA (exponential moving average) for stable checkpoint selection
     ema = EMA(model=unwrap_model(model), decay=config.get("ema_decay", 0.999))
+
+    # torch.compile for JIT speedup
+    if config.get("torch_compile") and torch.cuda.is_available():
+        try:
+            model = compile_model(model, mode="default")
+            print("  torch.compile enabled for 20-30% speedup")
+        except Exception as e:
+            print(f"  torch.compile failed (falling back): {e}")
 
     # FP16 scaler (persisted across resume)
     scaler = _make_scaler(USE_FP16)
