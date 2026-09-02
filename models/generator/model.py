@@ -247,6 +247,10 @@ class InterviewGenerator(nn.Module):
         # Gradient checkpointing flag
         self.gradient_checkpointing = config.gradient_checkpointing
 
+        # Dynamic dropout state
+        self._dropout_step = 0
+        self._base_dropout = config.dropout
+
         # Initialize weights (GPT-2 style)
         self.apply(self._init_weights)
 
@@ -396,6 +400,39 @@ class InterviewGenerator(nn.Module):
     @property
     def num_params_millions(self) -> float:
         return self.num_params / 1_000_000
+
+    def update_dropout(self, step: int, total_steps: int):
+        """Dynamic dropout: higher early (regularization), lower late (convergence)."""
+        self._dropout_step = step
+        progress = min(step / max(total_steps, 1), 1.0)
+        # Linear decay from base_dropout to 0.02 over training
+        new_dropout = self._base_dropout * (1.0 - progress) + 0.02 * progress
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = new_dropout
+
+    def get_dropout_rate(self) -> float:
+        """Get current dropout rate."""
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                return module.p
+        return 0.0
+
+    def get_weight_norms(self) -> dict:
+        """Get L2 norms of all weight matrices (for monitoring)."""
+        norms = {}
+        for name, param in self.named_parameters():
+            if param.requires_grad and param.dim() >= 2:
+                norms[name] = param.data.norm(2).item()
+        return norms
+
+    def get_gradient_norms(self) -> dict:
+        """Get L2 norms of all gradients (for monitoring)."""
+        norms = {}
+        for name, param in self.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                norms[name] = param.grad.data.norm(2).item()
+        return norms
 
     def enable_gradient_checkpointing(self):
         self.gradient_checkpointing = True

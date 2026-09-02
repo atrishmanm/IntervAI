@@ -7,6 +7,8 @@ Features:
   - Muon optimizer (2x faster convergence than AdamW)
   - Sequence packing (2-3x throughput via packed batches)
   - torch.compile (20-30% JIT speedup)
+  - Dynamic dropout (adjusts during training)
+  - Weight tying (share embedding weights)
   - ChatML / raw-text datasets
   - WSD (Warmup-Stable-Decay) LR schedule + cosine fallback
   - EMA (Exponential Moving Average) of model weights
@@ -17,6 +19,7 @@ Features:
   - Gradient checkpointing support
   - Robust checkpoint save/load with resume
   - Hardware-aware batch sizing (see env_config)
+  - Training analytics (15+ metrics, see analytics.py)
 """
 
 import hashlib
@@ -837,10 +840,13 @@ def make_training_configs(env):
       - Muon optimizer (2x faster than AdamW)
       - Sequence packing (2-3x throughput)
       - torch.compile (20-30% JIT speedup)
+      - Dynamic dropout (adjusts during training)
+      - Weight tying (share embedding weights)
       - WSD schedule
       - EMA weight averaging
       - Label smoothing
       - Gradient checkpointing for large model
+      - Training analytics (15+ metrics)
     """
     batch = env["BASE_BATCH_SIZE"]
     accum = env["GRAD_ACCUM_STEPS"]

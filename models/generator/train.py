@@ -55,6 +55,7 @@ from models.generator.train_utils import (
     _make_scaler, EMA, Muon, create_muon_optimizer, PackedDataset, pack_dataset,
     compile_model,
 )
+from models.generator.analytics import TrainingAnalytics
 
 # ─────────────────────────────────────────────────────────────
 # Stage definitions: which data file feeds each stage
@@ -390,9 +391,19 @@ def run_stage(stage, config):
                         extra={"stage": stage, "best_val_loss": best_val_loss},
                         scaler=scaler)
 
+    # Initialize training analytics (15+ metrics)
+    total_steps = len(train_loader) // config["grad_accum_steps"] * config["epochs"]
+    analytics = TrainingAnalytics(model, total_steps, stage_name=stage)
+
     for epoch in range(start_epoch, config["epochs"]):
         cur_epoch[0] = epoch
         print(f"\n--- Epoch {epoch+1}/{config['epochs']} ---")
+
+        # Update dynamic dropout
+        epoch_total_steps = len(train_loader) // config["grad_accum_steps"]
+        current_step = global_step - (epoch * epoch_total_steps)
+        unwrap_model(model).update_dropout(current_step, epoch_total_steps)
+
         train_loss, steps, global_step = train_epoch(
             model, train_loader, opt, sched, DEVICE,
             grad_clip=config["grad_clip"],
@@ -404,20 +415,28 @@ def run_stage(stage, config):
             on_checkpoint=_mid_epoch_save,
             scaler=scaler,
             label_smoothing=config.get("label_smoothing", 0.05),
+            analytics=analytics,
         )
         ema.update()
         val = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
         val_loss, val_ppl = val["loss"], val["ppl"]
-        print(f"  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  ppl={val_ppl:.2f}"
-              f"  tok_acc={val['tok_acc']:.4f}  top5_acc={val['top5_acc']:.4f}")
+
+        # Print epoch summary with all analytics
+        analytics.print_epoch_summary(epoch, train_loss, val)
 
         # Log per-epoch metrics
+        metrics = analytics.get_metrics()
         _append_log(stage, {
             "epoch": epoch + 1, "stage": stage,
             "train_loss": train_loss, "val_loss": val_loss,
             "ppl": val_ppl, "tok_acc": val["tok_acc"], "top5_acc": val["top5_acc"],
             "lr": opt.param_groups[0]["lr"], "global_step": global_step,
             "elapsed_min": round((time.time() - t0) / 60, 2),
+            "tok_per_sec": metrics["tok_per_sec"],
+            "grad_norm": metrics["grad_norm"],
+            "stability_score": metrics["stability_score"],
+            "peak_memory_gb": metrics["peak_memory_gb"],
+            "dropout_rate": unwrap_model(model).get_dropout_rate(),
         })
 
         # Best-checkpoint tracking + early stopping (use EMA weights for stability)
@@ -439,7 +458,10 @@ def run_stage(stage, config):
                 print(f"  Early stopping after epoch {epoch+1} (best val_loss={best_val_loss:.4f})")
                 break
 
-    print(f"\n  {stage} done in {(time.time()-t0)/60:.1f} min. Best val_loss={best_val_loss:.4f}")
+    # Print final analytics report
+    report = analytics.get_final_report()
+    print(f"\n  {stage} done in {report['elapsed_min']:.1f} min. Best val_loss={best_val_loss:.4f}")
+    print(f"  Throughput: {report['avg_tok_per_sec']:.0f} tokens/sec | Peak Memory: {report['peak_memory_gb']:.2f} GB")
     print(f"  Checkpoint: {ckpt_path}")
 
 
