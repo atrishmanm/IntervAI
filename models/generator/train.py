@@ -53,7 +53,7 @@ from models.generator.train_utils import (
     load_tokenizer, make_training_configs, dedup_examples, quality_filter,
     wrap_data_parallel, unwrap_model, find_learning_rate, profile_batch_size,
     _make_scaler, EMA, Muon, create_muon_optimizer, PackedDataset, pack_dataset,
-    compile_model,
+    compile_model, pad_collate,
 )
 from models.generator.analytics import TrainingAnalytics
 
@@ -152,7 +152,11 @@ def resolve_data_path(rel: str):
         # Datasets uploaded to Kaggle appear under /kaggle/input/<dataset-name>/<file>
         # Try direct path first, then scan /kaggle/input for the basename.
         candidates.append(Path("/kaggle/input") / rel)
+        # Also try flat (cruxeval.jsonl sits at data/raw/ not data/raw/cruxeval/)
+        candidates.append(Path("/kaggle/input") / Path(rel).name)
     candidates.append(ENV_ROOT / rel)
+    # Flat fallback: file may be at data/raw/<basename> even when rel has subdirs
+    candidates.append(ENV_ROOT / "data" / "raw" / Path(rel).name)
     # Scan /kaggle/input recursively for the basename as last resort
     if ENV == "kaggle":
         base = Path(rel).name
@@ -197,10 +201,16 @@ def build_dataset_for_stage(stage, tokenizer, config):
 
     # Build a wrapper dataset from the raw message lists
     class _Wrapper(torch.utils.data.Dataset):
-        def __init__(self, msgs):
+        def __init__(self, msgs, tokenizer, max_len):
             self.msgs = msgs
+            self.tokenizer = tokenizer
+            self.max_len = max_len
+            # Get pad id once
+            self.pad_id = self.tokenizer.token_to_id("[PAD]") or 0
+
         def __len__(self):
             return len(self.msgs)
+
         def __getitem__(self, i):
             parts = []
             for msg in self.msgs[i]:
@@ -208,11 +218,13 @@ def build_dataset_for_stage(stage, tokenizer, config):
                 content = msg.get("content", "")
                 parts.append(f"<|{role}|> {content} <|end|>")
             full = "\n".join(parts)
-            enc = tokenizer.encode(full)
-            ids = enc.ids[:max_len]
-            return {"input_ids": ids, "labels": ids}
+            enc = self.tokenizer.encode(full)
+            ids = enc.ids[:self.max_len]
+            # Return raw lists — pad_collate will pad to batch-max at load time.
+            # This avoids the "each element should be of equal size" crash.
+            return {"input_ids": ids, "labels": ids[:]}
 
-    full = _Wrapper(uniq)
+    full = _Wrapper(uniq, tokenizer, max_len)
     val_size = min(500, max(1, len(full) // 30))
     train_size = len(full) - val_size
     train_ds, val_ds = random_split(full, [train_size, val_size])
@@ -317,13 +329,21 @@ def run_stage(stage, config):
     # DataParallel shards a batch of `bs_per_gpu * NUM_GPUS` into bs_per_gpu/GPU.
     loader_bs = bs_per_gpu * max(NUM_GPUS, 1)
     config["batch_size"] = loader_bs
+    # Use ≥1 workers on Kaggle for overlap; but keep 0 workers on CPU to avoid
+    # spawning issues. persistent_workers requires num_workers > 0.
     num_workers = 2 if (ENV == "kaggle" and torch.cuda.is_available()) else 0
-    train_loader = DataLoader(train_ds, batch_size=loader_bs, shuffle=True,
-                              num_workers=num_workers, pin_memory=torch.cuda.is_available(),
-                              persistent_workers=(num_workers > 0))
-    val_loader = DataLoader(val_ds, batch_size=loader_bs,
-                            num_workers=num_workers, pin_memory=torch.cuda.is_available(),
-                            persistent_workers=(num_workers > 0))
+    train_loader = DataLoader(
+        train_ds, batch_size=loader_bs, shuffle=True,
+        num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+        persistent_workers=(num_workers > 0),
+        collate_fn=pad_collate,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=loader_bs,
+        num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+        persistent_workers=(num_workers > 0),
+        collate_fn=pad_collate,
+    )
     print(f"Train: {len(train_ds)} | Val: {len(val_ds)} | Per-GPU batch: {bs_per_gpu} "
           f"| Loader batch: {loader_bs} | GPUs: {NUM_GPUS}")
 

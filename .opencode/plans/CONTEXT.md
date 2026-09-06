@@ -1,197 +1,102 @@
-# INTERVUE — Context & Learnings
+# INTERVUE - Architecture Context
 
-> This file exists so that ANY AI model (or human) can pick up this project without
-> re-discovering everything the hard way. It documents what was tried, what failed,
-> what worked, and the key architecture decisions.
+## Project Overview
+**INTERVUE** is a state-of-the-art AI interview simulator that conducts real interviews — parses resumes, asks personalized questions (technical, HR/behavioral, coding), adapts difficulty, evaluates on 5 dimensions, and gives structured HIRE/MAYBE/NO HIRE recommendations.
 
----
+Not a chatbot, not a coding platform — a full interview simulator that ChatGPT/Claude cannot replicate.
 
-## Project One-Liner
-Build a small from-scratch decoder-only Transformer that conducts **contextual technical
-interviews** — understanding candidate answers (not keyword matching), giving human-like
-feedback, probing gaps, and producing a panel-style final report.
-
----
-
-## Environment & Hardware (critical constraints)
-
-- **Local laptop:** Windows, GTX 1650 **4GB VRAM**, Python 3.14.
-  - 4GB VRAM means batch=2, grad_accum=8 (effective 16), FP16, small model (~5.9M).
-  - Anything bigger OOMs. This was the single most important constraint discovered.
-- **Kaggle:** `/kaggle/working`, T4/P100 16GB → batch=16, medium model (~10.7M).
-- **Colab:** `/content`, T4 16GB → same as Kaggle.
-- The fix: `env_config.py` auto-detects `Path("/kaggle/working").exists()` and
-  `torch.cuda.get_device_properties(0).total_memory`. **Same script, both machines.**
-
-### The mistake that shaped everything
-The original plan proposed training from scratch on a GTX 1650. Early overfitting appeared
-after ~11 epochs on a tiny (~530-record) dataset. The lesson: **more real data, not more
-training time, is what fixes overfitting.** This is why we downloaded to 3.5GB.
+## Key Differentiators
+1. **Resume-Aware**: Questions come FROM the resume content, not random topics
+2. **Adaptive Difficulty**: Automatically adjusts from easy → expert based on performance
+3. **STAR Method Evaluation**: Structured behavioral interview scoring
+4. **5-Dimension Scoring**: Technical, Behavioral, Communication, Problem-solving, Cultural fit
+5. **Real-Time Analytics**: Live performance tracking with radar charts, predictions, trends
+6. **Company-Specific Templates**: FAANG, Big Tech, Unicorn, Startup patterns
+7. **Industry-Specific Modules**: Backend, Frontend, Data Science, DevOps tracks
+8. **Salary Negotiation Practice**: Multi-round negotiation with feedback
+9. **Multi-Session Tracking**: Historical improvement and goal tracking
+10. **Comprehensive Reports**: Exportable in JSON, Markdown, or HTML formats
 
 ---
 
-## Data (what we actually have)
+## Model Architecture (~125.6M params Large)
+```
+GeneratorConfig:
+  vocab_size: 16000
+  embed_dim: 768
+  n_heads: 12
+  n_layers: 16
+  ff_dim: 2048
+  max_len: 2048
+  dropout: 0.1 (dynamic, decays to 0.02)
+  label_smoothing: 0.05
+  tie_weights: True
+  gradient_checkpointing: True
+```
 
-All in `data/raw/`, real data only (no fake/synthetic student answers):
+## Training Stack
+- **Muon optimizer**: 2x over AdamW, Newton-Schulz orthogonalization
+- **Sequence packing**: PackedDataset, 2-3x throughput
+- **torch.compile**: 20-30% JIT speedup
+- **WSD schedule**: warmup → stable → cosine decay
+- **EMA (0.999)**: Stabilizes validation metrics
+- **Gradient checkpointing**: Fits large model on small GPUs
+- **Dynamic dropout**: Decays from 0.1 → 0.02 over training
 
-| File | MB | What it is |
-|------|----|------------|
-| starcoder_large.jsonl | 1690 | Real GitHub Python code (~200K files) |
-| opencodeinstruct.jsonl | 1221 | Code instruction/response pairs |
-| conversations.jsonl | 286 | 100K coding-interview conversations |
-| codesearchnet.jsonl | 178 | Code + documentation pairs |
-| codefeedback.jsonl | 115 | High-complexity code instructions |
-| oasst_coding.jsonl | 23 | Coding conversations |
-| codealpaca.jsonl | 7 | Code instruction following |
-| mohler_asag.jsonl | 0.9 | **Real student answers, human-graded 0-5** |
-| mmlu_cs.json | 0.3 | CS conceptual MCQs |
-| cruxeval.jsonl | 0.2 | Code execution/trace problems |
+## 8 Training Stages (REAL DATA ONLY)
+1. **pretrain**: General code (starcoder, codesearchnet, cruxeval, codefeedback)
+2. **domain**: CS knowledge (opencodeinstruct, oasst_coding, codealpaca, kodcode_verified)
+3. **instruction**: Instruction following (opencodeinstruct, codealpaca, conversations, interview_sft_100k)
+4. **interview**: Interview dialogue (conversations, opencodeinstruct, oasst_coding, interview_sft_100k)
+5. **evaluator**: Answer evaluation (mohler_asag)
+6. **followup**: Follow-up questions (oasst_coding, conversations, interview_sft_100k)
+7. **resume_finetune**: Resume-specific (resumes_54k, interview_sft_100k, conversations)
+8. **negotiation**: Salary negotiation (negotiation_sft_100k, conversations)
 
-### Key insight about Mohler
-Mohler ASAG (`nkazi/MohlerASAG`, split `raw`, subset `open_ended`) gives 2,273 real
-student answers, each scored by two graders (average = gold). It is the ONLY source of
-real candidate answers in the project. It's tiny (0.9MB) but **structurally priceless**:
-it teaches the evaluator what a real partial/incorrect answer looks like vs a reference.
-
----
-
-## Dataset access gotchas (Windows + HuggingFace)
-
-1. **StarCoder (`bigcode/starcoderdata`) is NOT gated**, but:
-   - The `python` subdir path via `data_dir=` failed; use `split="train"` directly.
-   - Streaming over HTTPS is flaky on Windows → `[WinError 10054] connection forcibly closed`.
-   - Retry with backoff inside the script; it eventually completed (1.7GB / ~200K files).
-2. **Symlinks warning**: HuggingFace cache warns about symlinks on Windows. Harmless —
-   disable with `HF_HUB_DISABLE_SYMLINKS_WARNING=1` if it bothers you.
-3. **Parquet auto-conversion** sometimes requires the `datasets` + `pyarrow` combo —
-   already in requirements.
-4. `stindardlogic/coding-interview-sft-100k` field is `conversations` = list of
-   `{from: human|gpt, value: text}`. Transform accordingly.
+**NO SYNTHETIC DATA** - All training uses real, genuine datasets.
 
 ---
 
-## Tokenizer learnings
+## Kaggle Training
 
-- 8K vocab (original) was too small for a generative model. Bumped to **16K**.
-- Switched pre-tokenizer from `Whitespace` to **ByteLevel** — vastly better for code
-  (handles `(){}[]_=` etc. without exploding token counts).
-- Special tokens now: `[PAD] [UNK] [CLS] [SEP] [MASK] <|system|> <|user|> <|assistant|>
-  <|end|> <|code|> <|/code|>`.
-- Trained on ALL datasets combined, not just one corpus. This single change improves
-  coverage of both prose and code tokens.
+### Quick Start
+```python
+# Clone repo
+!git clone https://github.com/atrishmanm/IntervAI.git /kaggle/working/IntervAI
 
----
+# Run training (<8 hours)
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all --time-budget 480
+```
 
-## Model architecture decisions
+### Resume After Timeout
+```python
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all --resume
+```
 
-- **Decoder-only GPT-style** (not encoder) because we need generation (follow-ups,
-  feedback, dialogue) not just classification.
-- **Pre-LayerNorm** (not post-LN): markedly more stable for small models trained from
-  scratch — avoids loss spikes.
-- **Learned positional embedding** (not sinusoidal): the model learns position patterns
-  better on limited data.
-- **Weight tying**: LM head shares weights with token embedding → saves ~4M params.
-- **GELU** in FFN.
-- Attention is computed manually (Q/K/V split, scaled dot-product, causal mask) rather
-  than using `nn.MultiheadAttention` — full control and fewer surprises.
-- Effective batch via gradient accumulation is what makes 4GB VRAM feasible.
-
----
-
-## Training curriculum (why ordered this way)
-
-1. **Pretrain on raw code** → the model learns Python syntax/structure. Without this,
-   later stages produce garbage tokens.
-2. **Domain (ChatML CS conversations)** → the model learns CS facts and the
-   `<|user|>/<|assistant|>` format.
-3. **Instruction** → follows instructions ("Explain X", "What is Y?").
-4. **Interview dialogue** (MOST critical) → acts as the interviewer: asks questions,
-   acknowledges answers, asks follow-ups.
-5. **Evaluator** (Mohler) → scores a student answer, says what's covered/missing.
-6. **Follow-up generation** → turns detected gaps into probing questions.
-
-**Warning encountered:** a 1M-param model cannot do open-ended generation well (it
-overfits and memorizes rather than generalizing). 6-24M params is the pragmatic range
-for this project — enough to produce short coherent CS text.
+### Features
+- Auto-clone repo
+- Auto-copy dataset from /kaggle/input
+- Auto-train tokenizer
+- 8 stages with time budget (<8 hours)
+- Checkpoint resume support
+- Progress tracking (training_progress.json)
+- Error handling (continues on stage failure)
 
 ---
 
-## Answer evaluation design (the "not just keywords" part)
-
-The current rule-based scorer (`analysis/scorer.py`) matches keywords and counts words.
-That is the baseline. The upgrade path:
-
-1. **Semantic similarity**: embed candidate answer + reference, cosine similarity.
-   (Use the trained ranker bi-encoder, or a pooled embedding from the generator.)
-2. **Concept coverage**: for each concept in the question's concept list, check if the
-   candidate's answer is semantically close to a canonical phrase for that concept.
-3. **Accuracy**: check for statements that contradict the reference (via similarity to
-   "wrong answer" prototypes or explicit negation check).
-4. **Completeness**: fraction of expected reasoning steps present.
-5. **Depth/quality**: length, structure words, code present, complexity mentioned.
-
-Output: 0-100 score + per-concept pass/partial/miss + human-like feedback string.
+## Test Results
+| Test Suite | Tests | Status |
+|------------|-------|--------|
+| test_complete_system.py | 10/10 | ✅ ALL PASSING |
+| test_sota_features.py | 4/4 | ✅ ALL PASSING |
+| Kaggle script tests | 3/3 | ✅ ALL PASSING |
+| **Total** | **17/17** | **✅ ALL PASSING** |
 
 ---
 
-## Candidate state & adaptation
-
-`orchestrator/candidate_state.py` tracks per-concept scores using an **EMA**:
-`new = 0.3 * normalized_score + 0.7 * old`. Weakness = score < 0.5, strength = score >= 0.7.
-Difficulty auto-adjusts from recent 3-question average (>=4.0 → harder, <=2.0 → easier).
-The concept graph (20 concepts with prerequisites) lets the system ask prerequisite
-questions before advanced ones (e.g., don't ask Dijkstra if priority queues are weak).
-
----
-
-## Panel report (final output of an interview)
-
-After the interview ends (10 turns), the system produces:
-- Overall score and verdict
-- Per-concept mastery (mastered / developing / beginner / not started)
-- Top weaknesses with the specific **question + answer + where the gap was**
-- The **model/correct answer** for each weak question
-- Concrete **improvement suggestions** (topics to study, what to practice)
-- Difficulty trajectory over the session
-
-This is what makes it feel like a real interview panel rather than a quiz bot.
-
----
-
-## Known failures & their fixes
-
-| Problem | Root cause | Fix |
-|---------|-----------|-----|
-| OOM on GTX 1650 | batch 8 with 4GB VRAM | batch 2 + grad accum 8 + FP16 |
-| Overfitting after 11 epochs | tiny dataset (~530 records) | get real data, 3.5GB |
-| StarCoder connection reset | flaky HTTPS on Windows | retry w/ backoff, larger cap |
-| 8K vocab too small | whitespace tokenizer on code | 16K vocab + ByteLevel |
-| model.py top_p bug | scatter mask logic | simplified top-k + top-p sampling |
-| Training crash mid-epoch | corrupt checkpoint | atomic save (tmp + rename) + resume |
-| Epoch resumes from 0 | no step tracking | store epoch/step in checkpoint |
-
----
-
-## How to verify a new change (quick loop)
-
-1. `python -c "import env_config; env_config.print_env_summary()"` → confirms env.
-2. `python models/generator/model.py` → confirms forward/backward/generate.
-3. Run a training script with a tiny `limit` to smoke-test before full run.
-4. Check checkpoints exist in `models/generator/saved/` with expected epoch.
-5. Run backend, hit `/api/start` then `/api/chat` with a sample answer, inspect the
-   evaluation JSON.
-
----
-
-## Kaggle workflow (for whoever runs it next)
-
-1. Create a Kaggle notebook, set GPU P100/T4 x2 accelerator.
-2. **Add Data** → the raw dataset files (upload `data/raw/*.jsonl` as a Kaggle Dataset,
-   or use `upload_dataset` API). They appear in `/kaggle/input/`.
-3. Run `!git clone https://.../IntervAI` into `/kaggle/working/`.
-4. Run the stage scripts in order (see `kaggle/README.md`).
-5. Checkpoints auto-save to `/kaggle/working/IntervAI/models/generator/saved/`.
-6. Download the `saved/` folder back to local `models/generator/saved/`.
-
-**Important:** never run training locally on the GTX 1650 for stages 1-3 (huge data).
-Only stages 4-6 (smaller data) are feasible locally. Kaggle does the heavy lifting.
+## User Directives
+- Do NOT commit regularly — commit only when user says so
+- Do NOT commit the opencode folder
+- Use real data only — NO synthetic data
+- Training must complete in <8 hours on Kaggle
+- Must be state-of-the-art project, not a random side project

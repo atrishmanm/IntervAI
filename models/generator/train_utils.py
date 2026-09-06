@@ -302,25 +302,59 @@ class PackedDataset(Dataset):
         return len(self.packed)
 
     def __getitem__(self, idx):
-        return self.packed[idx]
+        item = self.packed[idx]
+        return {
+            "input_ids": torch.tensor(item["input_ids"], dtype=torch.long),
+            "labels": torch.tensor(item["labels"], dtype=torch.long),
+        }
 
 
-def collate_packed(batch, pad_token_id=0):
-    """Collate packed sequences into a single batch with proper padding."""
-    max_len = max(len(b["input_ids"]) for b in batch)
-    input_ids = []
-    labels = []
+def pad_collate(batch, pad_token_id=0):
+    """Universal collate_fn: pads variable-length sequences to the batch max.
 
+    Works with both tensor and list input_ids/labels. This is required
+    whenever sequences are NOT pre-padded to a fixed length (e.g. packed
+    datasets, _Wrapper datasets, or the LR-finder mini-loader).
+
+    Each sample's input_ids and labels are padded to the same length
+    (the per-sample max of the two fields), then the whole batch is
+    padded to the batch-level max.
+    """
+    def _to_list(x):
+        if isinstance(x, torch.Tensor):
+            return x.tolist()
+        return list(x)
+
+    input_ids_out = []
+    labels_out = []
+    max_len = 0
+
+    # First pass: normalise per-sample so ids and labels have the same length
+    pairs = []
     for b in batch:
-        seq = b["input_ids"]
-        pad_len = max_len - len(seq)
-        input_ids.append(seq + [pad_token_id] * pad_len)
-        labels.append(b["labels"] + [pad_token_id] * pad_len)
+        ids = _to_list(b["input_ids"])
+        lbs = _to_list(b["labels"])
+        # Reconcile to same length within the sample
+        sample_max = max(len(ids), len(lbs))
+        ids = ids + [pad_token_id] * (sample_max - len(ids))
+        lbs = lbs + [pad_token_id] * (sample_max - len(lbs))
+        pairs.append((ids, lbs))
+        max_len = max(max_len, sample_max)
+
+    # Second pass: pad to batch max
+    for ids, lbs in pairs:
+        pad_len = max_len - len(ids)
+        input_ids_out.append(ids + [pad_token_id] * pad_len)
+        labels_out.append(lbs  + [pad_token_id] * pad_len)
 
     return {
-        "input_ids": torch.tensor(input_ids, dtype=torch.long),
-        "labels": torch.tensor(labels, dtype=torch.long),
+        "input_ids": torch.tensor(input_ids_out, dtype=torch.long),
+        "labels":    torch.tensor(labels_out,    dtype=torch.long),
     }
+
+
+# Keep old name as alias for backward compat
+collate_packed = pad_collate
 
 
 def pack_dataset(dataset, max_len=2048):
@@ -676,9 +710,6 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
     num_batches = 0
     global_step = start_step
     optimizer.zero_grad()
-    
-    if analytics:
-        analytics.start_epoch()
 
     if scaler is None:
         scaler = _make_scaler(use_fp16)
@@ -688,7 +719,9 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
         if grad_clip > 0:
             if use_fp16 and scaler is not None:
                 scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        else:
+            grad_norm = torch.tensor(0.0)
         if use_fp16 and scaler is not None:
             scaler.step(optimizer)
             scaler.update()
@@ -700,28 +733,47 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
         if ema is not None:
             ema.update()
         global_step += 1
+        return grad_norm
+
+    # Seed the analytics timing chain at epoch start
+    if analytics:
+        analytics._data_start = time.time()
+        analytics._fwd_start = time.time()
+        analytics._bwd_start = time.time()
+        analytics._opt_start = time.time()
+        analytics._step_start = time.time()
 
     for i, batch in enumerate(dataloader):
+        # Start timing for this step
+        if analytics:
+            analytics._step_start = time.time()
+            analytics._data_start = analytics._step_start  # data was loading since last step
+
         input_ids = batch["input_ids"].to(device, non_blocking=True)
         labels = batch["labels"].to(device, non_blocking=True)
-        
+
         if analytics:
-            analytics.end_data_loading()
+            analytics.end_data_loading()   # records data time, sets _fwd_start
 
         # Use research wrapper if available
         if research_wrapper is not None:
             loss_value = research_wrapper.train_step(batch)
             total_loss += loss_value
             num_batches += 1
-            
+
             if analytics:
                 analytics.update_loss(loss_value)
-            
+                analytics.update_throughput(input_ids.numel())
+                analytics.update_memory()
+
             if (i + 1) % log_every == 0:
                 print(f"    batch {num_batches}/{len(dataloader)}  loss={loss_value:.4f}  lr={optimizer.param_groups[0]['lr']:,.2e}")
-            
+
+            # Reset timing chain for next iteration
+            if analytics:
+                analytics._data_start = time.time()
             continue
-        
+
         # Standard training with optional research techniques
         with torch.amp.autocast("cuda", enabled=use_fp16):
             result = model(input_ids=input_ids, labels=labels,
@@ -730,27 +782,28 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
             if getattr(loss, "dim", lambda: 0)() > 0:
                 loss = loss.mean()
             loss = loss / grad_accum_steps
-        
+
         if analytics:
-            analytics.end_forward()
+            analytics.end_forward()        # records fwd time, sets _bwd_start
             analytics.update_loss(loss.item() * grad_accum_steps)
+            analytics.update_throughput(input_ids.numel())
+            analytics.update_memory()
 
         if use_fp16 and scaler is not None:
             scaler.scale(loss).backward()
         else:
             loss.backward()
-        
+
         if analytics:
-            analytics.end_backward()
+            analytics.end_backward()       # records bwd time, sets _opt_start
 
         num_batches += 1
 
         if (i + 1) % grad_accum_steps == 0:
-            _optimizer_step()
+            gn = _optimizer_step()
             if analytics:
-                analytics.end_optimizer()
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                analytics.update_gradient_norm(grad_norm.item())
+                analytics.end_optimizer()  # records opt time
+                analytics.update_grad_norm(gn.item() if hasattr(gn, 'item') else float(gn))
             if checkpoint_every and checkpoint_path and global_step % checkpoint_every == 0:
                 if on_checkpoint:
                     on_checkpoint(global_step, checkpoint_path)
@@ -759,6 +812,10 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
 
         if (num_batches % log_every) == 0:
             print(f"    batch {num_batches}/{len(dataloader)}  loss={loss.item()*grad_accum_steps:.4f}  lr={optimizer.param_groups[0]['lr']:,.2e}")
+
+        # Reset data timing for next iteration
+        if analytics:
+            analytics._data_start = time.time()
 
     if num_batches % grad_accum_steps != 0:
         _optimizer_step()
@@ -1154,6 +1211,10 @@ def find_learning_rate(model, dataloader, device, optimizer_factory, config,
             opt.step()
 
         l = loss.item()
+        # Guard: if loss diverges (NaN/inf), stop the range test early
+        if not math.isfinite(l) or l > 1e4:
+            print(f"    lr={lr:.2e}  loss=DIVERGED — stopping range test early")
+            break
         losses.append(l)
         lrs.append(lr)
         if l < best_loss:
@@ -1182,14 +1243,22 @@ def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
     print(f"\n  [auto] Profiling batch size (base={base_batch})...")
     model.train()
 
+    def _ids_to_list(x):
+        """Convert tensor or list to a plain Python list."""
+        if isinstance(x, torch.Tensor):
+            return x.tolist()
+        return list(x)
+
     def _try(bs):
         idx = torch.randint(len(dataset), (min(bs, len(dataset)),)).tolist()
         rows = [dataset[i] for i in idx]
-        # Pad sequences to equal length for stacking
-        max_len = max(len(r["input_ids"]) for r in rows)
+        # Safely convert each field regardless of whether it's a tensor or list
+        ids_lists = [_ids_to_list(r["input_ids"]) for r in rows]
+        lbl_lists = [_ids_to_list(r["labels"]) for r in rows]
+        max_len = max(len(s) for s in ids_lists)
         pad_id = 0
-        input_ids = [r["input_ids"] + [pad_id] * (max_len - len(r["input_ids"])) for r in rows]
-        labels = [r["labels"] + [pad_id] * (max_len - len(r["labels"])) for r in rows]
+        input_ids = [s + [pad_id] * (max_len - len(s)) for s in ids_lists]
+        labels = [s + [pad_id] * (max_len - len(s)) for s in lbl_lists]
         batch = {
             "input_ids": torch.tensor(input_ids, dtype=torch.long).to(device),
             "labels": torch.tensor(labels, dtype=torch.long).to(device),

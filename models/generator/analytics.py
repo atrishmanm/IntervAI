@@ -58,6 +58,17 @@ class TrainingAnalytics:
         # Per-epoch summaries
         self.epoch_summaries = []
 
+        # Internal timing state — pre-initialized to avoid AttributeError
+        self._step_start = time.time()
+        self._data_start = time.time()
+        self._fwd_start = time.time()
+        self._bwd_start = time.time()
+        self._opt_start = time.time()
+
+    def start_epoch(self):
+        """Optional: called at the start of an epoch. No-op by default."""
+        pass
+
     def start_step(self):
         """Call at start of each training step."""
         self._step_start = time.time()
