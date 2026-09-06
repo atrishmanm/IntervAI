@@ -57,8 +57,15 @@ def wrap_data_parallel(model, device_ids=None):
 
 
 def unwrap_model(model):
-    """Return the underlying module (strip DataParallel wrapper)."""
-    return model.module if isinstance(model, nn.DataParallel) else model
+    """Return the underlying module (stripping torch.compile, DataParallel, DDP wrappers)."""
+    while True:
+        if hasattr(model, "_orig_mod"):
+            model = model._orig_mod
+        elif hasattr(model, "module"):
+            model = model.module
+        else:
+            break
+    return model
 
 
 # ─────────────────────────────────────────────────────────────

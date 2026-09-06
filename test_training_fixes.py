@@ -206,8 +206,30 @@ result_bs = profile_batch_size(model3, TensorDS(), device='cpu',
                                base_batch=4, use_fp16=False)
 print(f'  profile_batch_size (CPU) returned {result_bs}  PASS')
 
+# ── 12. Test unwrap_model with torch.compile + DataParallel wrappers ──
+print()
+print('=== 12. Testing unwrap_model unwrapping ===')
+raw_model = create_small_model(vocab_size=100)
+
+class FakeDataParallel(torch.nn.Module):
+    def __init__(self, mod):
+        super().__init__()
+        self.module = mod
+
+class FakeCompiledModule(torch.nn.Module):
+    def __init__(self, mod):
+        super().__init__()
+        self._orig_mod = mod
+
+# Test nested wrappers (e.g. torch.compile around DataParallel)
+wrapped = FakeCompiledModule(FakeDataParallel(raw_model))
+unwrapped = unwrap_model(wrapped)
+assert unwrapped is raw_model, "Failed to unwrap compiled DataParallel wrapper"
+assert hasattr(unwrapped, 'update_dropout'), "Unwrapped model missing update_dropout"
+print('  unwrap_model strips FakeCompiledModule(FakeDataParallel) -> raw model  PASS')
+
 print()
 print('=' * 55)
-print('  ALL 11 TESTS PASSED')
+print('  ALL 12 TESTS PASSED')
 print('  Training pipeline is healthy and ready for Kaggle!')
 print('=' * 55)
