@@ -78,6 +78,16 @@ if IS_KAGGLE:
 
     print(f"[BOOTSTRAP] Ready. Repo at {KAGGLE_REPO}")
 
+    # Train tokenizer if not present
+    TOK_PATH = KAGGLE_REPO / "tokenizer" / "saved" / "tokenizer.json"
+    if not TOK_PATH.exists():
+        print("[BOOTSTRAP] Training tokenizer...")
+        subprocess.run([
+            sys.executable, str(KAGGLE_REPO / "tokenizer" / "train_tokenizer.py")
+        ], check=True)
+    else:
+        print("[BOOTSTRAP] Tokenizer already exists, skipping training.")
+
 # ═══════════════════════════════════════════════════════════════
 # SECTION 0: Configuration & Environment Setup
 # ═══════════════════════════════════════════════════════════════
