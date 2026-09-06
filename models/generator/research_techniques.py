@@ -182,20 +182,19 @@ def gradient_centralization_hook(grad):
     Centralizes gradients for better optimization.
     1-2% accuracy improvement.
     """
-    if grad.dim() > 1:
-        grad.sub_(grad.mean(dim=tuple(range(1, grad.dim())), keepdim=True))
+    if grad is not None and grad.dim() > 1:
+        return grad - grad.mean(dim=tuple(range(1, grad.dim())), keepdim=True)
     return grad
 
 
 def apply_gradient_centralization(model):
-    """Apply gradient centralization to all Conv/Linear layers."""
+    """Apply gradient centralization directly to all Conv/Linear layer weights."""
     hooks = []
     for module in model.modules():
         if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
-            hook = module.register_full_backward_hook(
-                lambda m, g, _: gradient_centralization_hook(g[0]) if g[0] is not None else None
-            )
-            hooks.append(hook)
+            if hasattr(module, "weight") and module.weight is not None and module.weight.requires_grad:
+                hook = module.weight.register_hook(gradient_centralization_hook)
+                hooks.append(hook)
     return hooks
 
 

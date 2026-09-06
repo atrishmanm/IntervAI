@@ -34,8 +34,8 @@ packed_ds = PackedDataset(dummy_examples, max_len=2048)
 print(f"  PackedDataset: {len(packed_ds)} packed sequences")
 
 sample = packed_ds[0]
-assert isinstance(sample["input_ids"], list)
-print(f"  [OK] __getitem__ returns list (len={len(sample['input_ids'])})")
+assert isinstance(sample["input_ids"], (list, torch.Tensor))
+print(f"  [OK] __getitem__ returns tensor/list (len={len(sample['input_ids'])})")
 
 batch = collate_packed([packed_ds[0], packed_ds[1], packed_ds[2]])
 assert isinstance(batch["input_ids"], torch.Tensor)

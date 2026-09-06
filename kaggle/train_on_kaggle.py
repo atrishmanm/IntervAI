@@ -136,9 +136,11 @@ def copy_dataset_into_raw(raw_dir: Path):
         "interview_sft_100k.jsonl",
         "mohler_asag.jsonl",
         "resumes_54k.jsonl",
+        "resumes_54k.json",
         "negotiation_sft_100k.jsonl",
         "kodcode_verified.jsonl",
         "cruxeval.jsonl",
+        "cruxeval.json",
     }
 
     copied = 0
@@ -162,6 +164,18 @@ def copy_dataset_into_raw(raw_dir: Path):
             print(f"    + {item.name}")
         else:
             print(f"    = {item.name} (exists)")
+
+    # Ensure aliases exist for json vs jsonl
+    for base in ["resumes_54k", "cruxeval"]:
+        f_json = raw_dir / f"{base}.json"
+        f_jsonl = raw_dir / f"{base}.jsonl"
+        if f_json.exists() and not f_jsonl.exists():
+            shutil.copy2(f_json, f_jsonl)
+            print(f"    + alias: created {f_jsonl.name} from {f_json.name}")
+        elif f_jsonl.exists() and not f_json.exists():
+            shutil.copy2(f_jsonl, f_json)
+            print(f"    + alias: created {f_json.name} from {f_jsonl.name}")
+
     print(f"  Copied {copied} files, skipped {skipped} unnecessary files")
 
 
@@ -270,7 +284,7 @@ def main():
 
         t0 = time.time()
         try:
-            rc = os.system(f"{sys.executable} models/generator/train.py --stage {s}")
+            rc = os.system(f"{sys.executable} models/generator/train.py --stage {s} --time-budget {expected_stage_budget}")
             elapsed = (time.time() - t0) / 60
 
             if rc != 0:

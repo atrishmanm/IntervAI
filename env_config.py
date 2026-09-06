@@ -23,8 +23,8 @@ from pathlib import Path
 # Environment detection
 # ─────────────────────────────────────────────────────────────
 
-IS_KAGGLE = Path("/kaggle/working").exists()
-IS_COLAB = Path("/content").exists()
+IS_KAGGLE = (os.name != "nt") and Path("/kaggle/working").exists()
+IS_COLAB = (os.name != "nt") and Path("/content").exists()
 
 if IS_KAGGLE:
     ENV = "kaggle"

@@ -522,20 +522,43 @@ class ChatDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.examples = []
-        with open(jsonl_path, encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if limit and i >= limit:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    msgs = self._messages_from_record(rec)
-                    if msgs:
-                        self.examples.append(msgs)
-                except json.JSONDecodeError:
-                    continue
+
+        # Handle full JSON array format (e.g. resumes_54k.json, cruxeval.json)
+        loaded_as_json_array = False
+        try:
+            with open(jsonl_path, encoding="utf-8") as f:
+                first_non_ws = f.read(1)
+                while first_non_ws and first_non_ws.isspace():
+                    first_non_ws = f.read(1)
+                if first_non_ws == "[":
+                    f.seek(0)
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        for i, rec in enumerate(data):
+                            if limit and i >= limit:
+                                break
+                            msgs = self._messages_from_record(rec)
+                            if msgs:
+                                self.examples.append(msgs)
+                        loaded_as_json_array = True
+        except Exception:
+            pass
+
+        if not loaded_as_json_array:
+            with open(jsonl_path, encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if limit and i >= limit:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        msgs = self._messages_from_record(rec)
+                        if msgs:
+                            self.examples.append(msgs)
+                    except json.JSONDecodeError:
+                        continue
 
     @staticmethod
     def _messages_from_record(rec: dict):
@@ -600,6 +623,12 @@ class ChatDataset(Dataset):
                          "content": f"Score: {score}/5. The answer "
                                     f"{'covers the key points well' if float(score) >= 3 else 'is incomplete or incorrect'}."}]
             return None
+        if "resume_text" in rec:
+            rt = rec.get("resume_text", "")
+            skills = rec.get("skills", [])
+            skills_str = f"\nKey Skills: {', '.join(skills)}" if skills else ""
+            return [{"role": "user", "content": f"Candidate Resume:\n{rt}{skills_str}\n\nPlease analyze this profile for a technical interview."},
+                    {"role": "assistant", "content": "I have evaluated the candidate's resume and qualifications. Ready to generate tailored technical interview questions based on their demonstrated experience."}]
         if "text" in rec:
             text = rec["text"]
             if isinstance(text, str) and text.strip():
@@ -710,7 +739,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
                 start_step=0, log_every=50, on_checkpoint=None,
                 checkpoint_every=None, checkpoint_path=None, scaler=None,
                 ema=None, label_smoothing=0.0, analytics=None,
-                research_wrapper=None):
+                research_wrapper=None, max_minutes=None, stage_start_time=None):
     """Train for one epoch with research techniques. Returns (avg_loss, num_batches, global_step)."""
     model.train()
     total_loss = 0.0
@@ -819,6 +848,13 @@ def train_epoch(model, dataloader, optimizer, scheduler, device,
 
         if (num_batches % log_every) == 0:
             print(f"    batch {num_batches}/{len(dataloader)}  loss={loss.item()*grad_accum_steps:.4f}  lr={optimizer.param_groups[0]['lr']:,.2e}")
+
+        # Time budget enforcement check
+        if max_minutes and stage_start_time and (num_batches % 25 == 0):
+            elapsed_min = (time.time() - stage_start_time) / 60.0
+            if elapsed_min >= max_minutes:
+                print(f"\n    [TIME BUDGET] Stage reached budget limit ({max_minutes:.1f} min, elapsed: {elapsed_min:.1f} min). Gracefully finalizing epoch...")
+                break
 
         # Reset data timing for next iteration
         if analytics:
@@ -1040,9 +1076,9 @@ def make_training_configs(env):
     return {
         "pretrain": {
             "lr": 8e-4, "warmup_ratio": 0.01, "weight_decay": 0.1,
-            "betas": (0.9, 0.95), "epochs": 3, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 2000, "lr_finder": True,
+            "betas": (0.9, 0.95), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
             "ema_decay": 0.999, "label_smoothing": 0.03,
             "schedule": "cosine", "stable_pct": 0.80, "decay_pct": 0.18,
             "gradient_checkpointing": False,
@@ -1054,9 +1090,9 @@ def make_training_configs(env):
         },
         "domain": {
             "lr": 4e-4, "warmup_ratio": 0.02, "weight_decay": 0.1,
-            "betas": (0.9, 0.95), "epochs": 5, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 2000, "lr_finder": True,
+            "betas": (0.9, 0.95), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
             "ema_decay": 0.999, "label_smoothing": 0.03,
             "schedule": "cosine", "stable_pct": 0.80, "decay_pct": 0.18,
             "gradient_checkpointing": False,
@@ -1068,9 +1104,9 @@ def make_training_configs(env):
         },
         "instruction": {
             "lr": 2e-4, "warmup_ratio": 0.03, "weight_decay": 0.05,
-            "betas": (0.9, 0.99), "epochs": 5, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 1000, "lr_finder": True,
+            "betas": (0.9, 0.99), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
             "ema_decay": 0.999, "label_smoothing": 0.03,
             "schedule": "cosine", "stable_pct": 0.80, "decay_pct": 0.18,
             "gradient_checkpointing": False,
@@ -1082,9 +1118,9 @@ def make_training_configs(env):
         },
         "interview": {
             "lr": 1e-4, "warmup_ratio": 0.05, "weight_decay": 0.03,
-            "betas": (0.9, 0.99), "epochs": 8, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 1000, "lr_finder": True,
+            "betas": (0.9, 0.99), "epochs": 3, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 1000, "lr_finder": True,
             "ema_decay": 0.999, "label_smoothing": 0.03,
             "schedule": "cosine", "stable_pct": 0.70, "decay_pct": 0.25,
             "gradient_checkpointing": True,
@@ -1096,9 +1132,9 @@ def make_training_configs(env):
         },
         "evaluator": {
             "lr": 1e-4, "warmup_ratio": 0.05, "weight_decay": 0.03,
-            "betas": (0.9, 0.99), "epochs": 8, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 1000, "lr_finder": True,
+            "betas": (0.9, 0.99), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 500, "lr_finder": True,
             "ema_decay": 0.999, "label_smoothing": 0.05,
             "schedule": "cosine", "stable_pct": 0.70, "decay_pct": 0.25,
             "gradient_checkpointing": True,
@@ -1110,9 +1146,9 @@ def make_training_configs(env):
         },
         "followup": {
             "lr": 1e-4, "warmup_ratio": 0.05, "weight_decay": 0.03,
-            "betas": (0.9, 0.99), "epochs": 8, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 1000, "lr_finder": True,
+            "betas": (0.9, 0.99), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 500, "lr_finder": True,
             "ema_decay": 0.999, "label_smoothing": 0.03,
             "schedule": "cosine", "stable_pct": 0.70, "decay_pct": 0.25,
             "gradient_checkpointing": True,
@@ -1124,9 +1160,9 @@ def make_training_configs(env):
         },
         "resume_finetune": {
             "lr": 5e-5, "warmup_ratio": 0.05, "weight_decay": 0.02,
-            "betas": (0.9, 0.99), "epochs": 10, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 500, "lr_finder": False,
+            "betas": (0.9, 0.99), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 500, "lr_finder": False,
             "ema_decay": 0.999, "label_smoothing": 0.02,
             "schedule": "cosine", "stable_pct": 0.65, "decay_pct": 0.30,
             "gradient_checkpointing": True,
@@ -1138,9 +1174,9 @@ def make_training_configs(env):
         },
         "negotiation": {
             "lr": 5e-5, "warmup_ratio": 0.05, "weight_decay": 0.02,
-            "betas": (0.9, 0.99), "epochs": 10, "batch_size": batch,
-            "grad_clip": 1.0, "max_len": 2048, "grad_accum_steps": accum,
-            "patience": 4, "ckpt_every": 500, "lr_finder": False,
+            "betas": (0.9, 0.99), "epochs": 2, "batch_size": batch,
+            "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
+            "patience": 2, "ckpt_every": 500, "lr_finder": False,
             "ema_decay": 0.999, "label_smoothing": 0.02,
             "schedule": "cosine", "stable_pct": 0.65, "decay_pct": 0.30,
             "gradient_checkpointing": True,

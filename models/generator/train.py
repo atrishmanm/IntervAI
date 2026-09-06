@@ -148,24 +148,41 @@ def _factory():
 def resolve_data_path(rel: str):
     """Resolve a stage data file. Local: <ROOT>/<rel>. Kaggle: /kaggle/input/<rel>."""
     candidates = []
-    if ENV == "kaggle":
-        # Datasets uploaded to Kaggle appear under /kaggle/input/<dataset-name>/<file>
-        # Try direct path first, then scan /kaggle/input for the basename.
-        candidates.append(Path("/kaggle/input") / rel)
-        # Also try flat (cruxeval.jsonl sits at data/raw/ not data/raw/cruxeval/)
-        candidates.append(Path("/kaggle/input") / Path(rel).name)
-    candidates.append(ENV_ROOT / rel)
-    # Flat fallback: file may be at data/raw/<basename> even when rel has subdirs
-    candidates.append(ENV_ROOT / "data" / "raw" / Path(rel).name)
-    # Scan /kaggle/input recursively for the basename as last resort
-    if ENV == "kaggle":
-        base = Path(rel).name
-        for d in Path("/kaggle/input").rglob(base):
-            candidates.append(d)
+    base_rel = Path(rel)
+    # Generate alternates (.json <-> .jsonl)
+    alts = [rel]
+    if rel.endswith(".jsonl"):
+        alts.append(rel[:-1])  # .json
+    elif rel.endswith(".json"):
+        alts.append(rel + "l")  # .jsonl
+
+    for a in alts:
+        a_base = Path(a).name
+        if ENV == "kaggle":
+            candidates.append(Path("/kaggle/input") / a)
+            candidates.append(Path("/kaggle/input") / a_base)
+            for d in Path("/kaggle/input").rglob(a_base):
+                candidates.append(d)
+        candidates.append(ENV_ROOT / a)
+        candidates.append(ENV_ROOT / "data" / "raw" / a_base)
+
     for c in candidates:
         if c.exists():
             return c
     return candidates[0]
+
+
+# Maximum unique examples per curriculum stage to guarantee completion within 8 hours on 2x T4
+STAGE_MAX_EXAMPLES = {
+    "pretrain": 40_000,
+    "domain": 25_000,
+    "instruction": 20_000,
+    "interview": 30_000,
+    "evaluator": 15_000,
+    "followup": 15_000,
+    "resume_finetune": 15_000,
+    "negotiation": 15_000,
+}
 
 
 def build_dataset_for_stage(stage, tokenizer, config):
@@ -181,7 +198,7 @@ def build_dataset_for_stage(stage, tokenizer, config):
         if not path.exists():
             print(f"  [skip] missing {rel} ({path})")
             continue
-        # All our training files are JSONL. Use ChatDataset (handles messages + text).
+        # All our training files are JSONL or JSON arrays. Use ChatDataset (handles messages + text + resumes).
         try:
             ds = ChatDataset(str(path), tokenizer, max_len=max_len, limit=_LIMIT)
             print(f"  + {path.name}: {len(ds)} examples")
@@ -198,6 +215,13 @@ def build_dataset_for_stage(stage, tokenizer, config):
     # previously collapsed distinct conversations, losing 80%+ of the data.
     uniq = dedup_examples(examples)
     print(f"  Deduplicated: {len(examples)} -> {len(uniq)}")
+
+    # Apply sample cap for <8h training budget if not in smoke-test limit mode
+    if _LIMIT is None and stage in STAGE_MAX_EXAMPLES:
+        cap = STAGE_MAX_EXAMPLES[stage]
+        if len(uniq) > cap:
+            print(f"  [Sample Budget] Capping {stage} dataset to {cap:,} examples for optimal <8h convergence")
+            uniq = uniq[:cap]
 
     # Build a wrapper dataset from the raw message lists
     class _Wrapper(torch.utils.data.Dataset):
@@ -281,9 +305,11 @@ def _append_log(stage, record, path=None):
 # Single stage runner
 # ─────────────────────────────────────────────────────────────
 
-def run_stage(stage, config):
+def run_stage(stage, config, time_budget=None):
     print(f"\n{'='*60}")
     print(f"  STAGE: {stage.upper()}")
+    if time_budget:
+        print(f"  Stage time budget: {time_budget:.1f} min")
     print(f"{'='*60}")
 
     t0 = time.time()
@@ -421,13 +447,15 @@ def run_stage(stage, config):
     # EMA (exponential moving average) for stable checkpoint selection
     ema = EMA(model=unwrap_model(model), decay=config.get("ema_decay", 0.999))
 
-    # torch.compile for JIT speedup
-    if config.get("torch_compile") and torch.cuda.is_available():
+    # torch.compile for JIT speedup (single-GPU only: multi-GPU DataParallel Inductor can conflict across streams)
+    if config.get("torch_compile") and torch.cuda.is_available() and NUM_GPUS <= 1:
         try:
             model = compile_model(model, mode="default")
             print("  torch.compile enabled for 20-30% speedup")
         except Exception as e:
             print(f"  torch.compile failed (falling back): {e}")
+    elif NUM_GPUS > 1:
+        print(f"  Multi-GPU ({NUM_GPUS}x GPUs): using native DataParallel FP16 without torch.compile for stability")
 
     # FP16 scaler (persisted across resume)
     scaler = _make_scaler(USE_FP16)
@@ -465,6 +493,11 @@ def run_stage(stage, config):
     analytics = TrainingAnalytics(model, total_steps, stage_name=stage)
 
     for epoch in range(start_epoch, config["epochs"]):
+        # Check overall stage time budget before starting epoch
+        if time_budget and (time.time() - t0) / 60 >= time_budget:
+            print(f"\n  [TIME BUDGET REACHED] Stage '{stage}' reached allocated budget limit ({time_budget:.1f} min). Wrapping up stage...")
+            break
+
         cur_epoch[0] = epoch
         print(f"\n--- Epoch {epoch+1}/{config['epochs']} ---")
 
@@ -485,6 +518,8 @@ def run_stage(stage, config):
             scaler=scaler,
             label_smoothing=config.get("label_smoothing", 0.05),
             analytics=analytics,
+            max_minutes=time_budget,
+            stage_start_time=t0,
         )
         ema.update()
 
@@ -581,6 +616,8 @@ def main():
                              "interview", "evaluator", "followup", "resume_finetune", "negotiation"])
     ap.add_argument("--limit", type=int, default=None,
                     help="Limit examples per file (for smoke tests)")
+    ap.add_argument("--time-budget", type=float, default=None,
+                    help="Time budget in minutes for the stage")
     args = ap.parse_args()
 
     print_env_summary()
@@ -608,7 +645,7 @@ def main():
 
     for stage in stages:
         try:
-            run_stage(stage, configs[stage])
+            run_stage(stage, configs[stage], time_budget=args.time_budget)
         except Exception as e:
             print(f"\n  X Stage '{stage}' failed: {e}")
             import traceback; traceback.print_exc()
