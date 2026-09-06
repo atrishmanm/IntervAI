@@ -891,6 +891,15 @@ def section5_generative_training():
             "data/raw/conversations.jsonl",
             "data/raw/interview_sft_100k.jsonl",
         ],
+        "resume_finetune": [
+            "data/raw/resumes_54k.jsonl",
+            "data/raw/interview_sft_100k.jsonl",
+            "data/raw/conversations.jsonl",
+        ],
+        "negotiation": [
+            "data/raw/negotiation_sft_100k.jsonl",
+            "data/raw/conversations.jsonl",
+        ],
     }
 
     STAGE_CKPT = {
@@ -900,6 +909,8 @@ def section5_generative_training():
         "interview": "interview_tuned.pt",
         "evaluator": "evaluator.pt",
         "followup": "final_model.pt",
+        "resume_finetune": "resume_finetuned.pt",
+        "negotiation": "negotiation_tuned.pt",
     }
 
     STAGE_INIT = {
@@ -909,6 +920,8 @@ def section5_generative_training():
         "interview": "domain_tuned.pt",
         "evaluator": "interview_tuned.pt",
         "followup": "interview_tuned.pt",
+        "resume_finetune": "final_model.pt",
+        "negotiation": "resume_finetuned.pt",
     }
 
     STAGE_MAX_EXAMPLES = {
@@ -918,6 +931,8 @@ def section5_generative_training():
         "interview": 400 if SMOKE_TEST else 30_000,
         "evaluator": 200 if SMOKE_TEST else 15_000,
         "followup": 200 if SMOKE_TEST else 15_000,
+        "resume_finetune": 200 if SMOKE_TEST else 15_000,
+        "negotiation": 200 if SMOKE_TEST else 15_000,
     }
 
     configs = make_training_configs({
@@ -1182,7 +1197,7 @@ def section5_generative_training():
         return {"stage": stage, "val_loss": best_val_loss, "elapsed_min": elapsed}
 
     # Run stages
-    stages = ["pretrain", "domain", "instruction", "interview", "evaluator", "followup"]
+    stages = ["pretrain", "domain", "instruction", "interview", "evaluator", "followup", "resume_finetune", "negotiation"]
     results = []
     total_t0 = time.time()
 
