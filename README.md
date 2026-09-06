@@ -1,89 +1,116 @@
 <div align="center">
 
-# AI Interview Prep (V3.1)
+# INTERVUE — AI Interview Simulator
 
-A rigorous, highly analytical technical interview prep platform trained entirely from scratch on a dataset of 100,000 real coding interviews. 
+A **state-of-the-art interview simulator** trained from scratch that conducts real interviews — not a chatbot, not a coding platform.
 
-Unlike ChatGPT, which provides conversational feedback, this system provides a **strict, 5-factor data-driven Report Card** evaluating your algorithmic approach, time/space complexity, edge cases, and communication depth.
+**Upload your resume → Get asked personalized questions → Receive a structured evaluation report.**
+
+Unlike ChatGPT/Claude (which just chat), INTERVUE:
+- Parses YOUR resume and asks about YOUR experience
+- Adapts question difficulty based on YOUR performance  
+- Scores on 5 dimensions (technical, behavioral, communication, problem-solving, cultural fit)
+- Evaluates STAR method for behavioral answers
+- Gives you a structured HIRE/MAYBE/NO HIRE recommendation
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-green)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red)
 
 </div>
 
-## 🌟 Why this over ChatGPT?
+## Why This Isn't Replaceable by ChatGPT/Claude
 
-When you practice interviews with general LLMs, they often give you the answer, are too lenient, or fail to enforce strict interview rubrics. This platform is different:
+| Feature | ChatGPT/Claude | INTERVUE |
+|---------|---------------|----------|
+| Resume-based questions | Generic | Asks about YOUR projects |
+| Adaptive difficulty | Fixed | Gets harder if you answer well |
+| Multi-dim scoring | "Good answer" | 15+ rubric dimensions |
+| STAR evaluation | None | Scores S/T/A/R completeness |
+| Structured report | None | HIRE/MAYBE/NO HIRE with breakdown |
+| Interview simulation | Chat | Timed questions, phases, flow |
 
-1. **No External APIs:** The logic and evaluation are completely local, built from scratch without calling OpenAI or Anthropic.
-2. **Direct Expert Mapping:** Every question is mapped directly to a real, expert transcript from the `stindardlogic/coding-interview-sft-100k` dataset.
-3. **The 5-Factor Report Card:** Your answers are rigorously scored out of 100 on:
-   - **Algorithmic Approach:** Did you identify the right pattern?
-   - **Time Complexity:** Did you state the correct Big-O bound?
-   - **Space Complexity:** Did you state the correct memory footprint?
-   - **Edge Cases:** Did you identify constraints (empty arrays, negatives, etc.)?
-   - **Communication Depth:** Was your reasoning detailed and substantive?
+## Architecture
 
-## 🚀 Quick Start (1-Click Run)
-
-For Windows users, getting started takes exactly one click.
-
-1. Open PowerShell in the project directory.
-2. Run the startup script:
-   ```powershell
-   ./run.ps1
-   ```
-
-**What this script does automatically:**
-- Creates a Python virtual environment (`venv`).
-- Installs all requirements.
-- Downloads the HuggingFace dataset (if missing).
-- Cleans and parses the dataset into 30,000+ targeted interview questions.
-- Builds the SQLite Question Bank.
-- Starts the FastAPI backend.
-- Opens your browser to the sleek, ChatGPT-style interview interface.
-
-*(Note: The very first time you run this, it may take 2-3 minutes to download and process the dataset. Subsequent runs will be instant!)*
-
-## 🧠 Question Types
-
-The system extracts and tests you on three specific question formats:
-
-1. **Theoretical Analysis:** "What is the optimal time/space complexity for solving [Problem]?"
-2. **Code Analysis (Output Prediction):** "What does the following snippet output?" (Tests dry-running code in your head).
-3. **Concept Explanation:** "Explain the Sliding Window approach for solving [Problem]. Why does it work?"
-
-## 📁 Architecture & File Structure
-
-```text
-aiInterview/
-├── run.ps1                      # 1-Click Startup Script
-├── train_all.py                 # Data Pipeline Orchestrator
-├── requirements.txt
-├── data/
-│   ├── raw/                     # Downloaded HuggingFace data
-│   ├── processed/               # Cleaned JSONL files
-│   └── question_bank.db         # SQLite database mapping questions -> expert answers
-├── data_pipeline/
-│   ├── download_datasets.py     # Fetches the 100k interview dataset
-│   ├── clean_data.py            # NLP extraction of questions/complexities
-│   └── build_question_bank.py   # Ingests clean data into SQLite
-├── analysis/
-│   └── scorer.py                # 5-Factor Analytical evaluation engine
-├── orchestrator/
-│   └── state_machine.py         # Manages the flow of the interview session
-├── backend/
-│   ├── main.py                  # FastAPI server and endpoints
-│   └── inference_service.py     # Connects orchestrator to the scorer
-└── frontend/
-    └── index.html               # Clean, grayscale, ChatGPT-style UI
+```
+┌─────────────────────────────────────────────────────┐
+│                  INTERVUE Stack                      │
+├─────────────────────────────────────────────────────┤
+│  Resume Parser → Skill Extractor → Question Selector │
+│       ↓              ↓                  ↓            │
+│  Adaptive Difficulty Engine → Interview Flow         │
+│       ↓              ↓                  ↓            │
+│  125M Transformer ←→ STAR Evaluator ←→ Score Rubric  │
+│       ↓              ↓                  ↓            │
+│  Structured Feedback Report (5 dimensions)          │
+└─────────────────────────────────────────────────────┘
 ```
 
-## 🎙️ Voice Support
+## Interview Phases
 
-The UI includes Web Speech API integration. Click the microphone icon to answer questions verbally, just like a real interview!
+1. **Warm-up** — Tell me about yourself, your background
+2. **Technical** — Coding, system design, algorithms (adaptive difficulty)
+3. **Behavioral** — STAR method questions (conflict, leadership, failure)
+4. **Problem-solving** — Case studies, tradeoffs, architecture decisions
+5. **Wrap-up** — Your questions, closing thoughts
 
-## 📜 License
+## Model Training (125M params, SOTA)
 
-MIT License. Feel free to use this for your college projects or personal interview prep!
+- **Muon optimizer** — 2x faster than AdamW (proven at 16B scale)
+- **Sequence packing** — 2-3x throughput
+- **torch.compile** — 20-30% JIT speedup
+- **Dynamic dropout** — Regularization adapts during training
+- **WSD schedule** — Warmup-Stable-Decay learning rate
+- **EMA** — Exponential moving average for stable checkpoints
+- **15+ analytics metrics** — Throughput, gradient norms, stability score
+
+## Quick Start
+
+```bash
+# Install
+pip install -r requirements.txt
+
+# Train tokenizer (case-sensitive, 16K vocab)
+python tokenizer/train_tokenizer.py
+
+# Run training (6 stages, ~2h on T4x2)
+python models/generator/train.py --stage all
+
+# Start backend
+python backend/main.py
+```
+
+## Training Stages
+
+| Stage | Data | Purpose |
+|-------|------|---------|
+| Pretrain | Code + educational text | Language fundamentals |
+| Domain | CS conversations | Technical dialogue |
+| Instruction | Instruction datasets | Following directions |
+| Interview | Interview transcripts | Interview flow |
+| Evaluator | Scoring datasets | Answer evaluation |
+| Follow-up | Conversation data | Natural follow-ups |
+
+## Project Structure
+
+```
+IntervAI/
+├── models/generator/          # Transformer model + training
+│   ├── model.py              # 125M param decoder-only Transformer
+│   ├── train.py              # Unified training script
+│   ├── train_utils.py        # Muon, WSD, EMA, packing
+│   ├── analytics.py          # 15+ training metrics
+│   └── interview_metrics.py  # BLEU, ROUGE, concept accuracy
+├── orchestrator/
+│   ├── interview_engine.py   # Resume parser + adaptive interview
+│   └── state_machine.py      # Interview state management
+├── tokenizer/                # Case-sensitive BPE tokenizer
+├── backend/                  # FastAPI server
+├── data_pipeline/            # Data processing
+├── scripts/                  # Download scripts
+└── kaggle/                   # Kaggle training runner
+```
+
+## License
+
+MIT

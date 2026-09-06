@@ -182,7 +182,7 @@ class TrainingAnalytics:
             "avg_opt_ms": avg_opt * 1000,
             "avg_data_ms": avg_data * 1000,
             "grad_norm": self.grad_norms[-1] if self.grad_norms else 0,
-            "grad_norm_mean": sum(self.grad_norms[-100:]) / max(len(self.grad_norms), 1),
+            "grad_norm_mean": sum(self.grad_norms[-100:]) / max(len(self.grad_norms[-100:]), 1),
             "grad_var": self.grad_variances[-1] if self.grad_variances else 0,
             "peak_memory_gb": self.peak_memory,
             "stability_score": stability,

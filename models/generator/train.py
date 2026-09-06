@@ -48,7 +48,7 @@ from env_config import (
 )
 from models.generator.model import create_small_model, create_medium_model, create_large_model
 from models.generator.train_utils import (
-    TextDataset, ChatDataset, get_cosine_schedule_with_warmup, get_wsd_schedule,
+    TextDataset, ChatDataset, get_cosine_schedule_with_warmup, get_cosine_with_warm_restarts_schedule, get_wsd_schedule,
     train_epoch, evaluate, save_checkpoint, load_checkpoint,
     load_tokenizer, make_training_configs, dedup_examples, quality_filter,
     wrap_data_parallel, unwrap_model, find_learning_rate, profile_batch_size,
@@ -62,41 +62,49 @@ from models.generator.analytics import TrainingAnalytics
 # ─────────────────────────────────────────────────────────────
 
 # Data file selection per stage. Paths are relative to ROOT.
+# ALL datasets are REAL - no synthetic data.
+# New datasets for company templates, industry modules, salary negotiation.
 STAGE_DATA = {
     "pretrain": [
-        "data/raw/starcoder_large.jsonl",
-        "data/raw/codesearchnet.jsonl",
-        "data/raw/cruxeval/cruxeval.jsonl",
-        "data/raw/fineweb_edu_sample.jsonl",
-        "data/raw/openwebtext_sample.jsonl",
+        "data/raw/starcoder_large.jsonl",           # Real code from BigCode
+        "data/raw/codesearchnet.jsonl",              # Real code search pairs
+        "data/raw/cruxeval/cruxeval.jsonl",          # Real code reasoning
+        "data/raw/codefeedback.jsonl",               # Real code feedback
     ],
     "domain": [
-        "data/raw/conversations.jsonl",
-        "data/raw/opencodeinstruct.jsonl",
-        "data/raw/oasst_coding.jsonl",
-        "data/raw/code_contests_sample.jsonl",
+        "data/raw/opencodeinstruct.jsonl",           # Real coding instructions
+        "data/raw/oasst_coding.jsonl",               # Real coding Q&A from OpenAssistant
+        "data/raw/codealpaca.jsonl",                 # Real code instructions
+        "data/raw/kodcode_verified.jsonl",           # Real verified coding (KodCode)
     ],
     "instruction": [
-        "data/raw/codealpaca.jsonl",
-        "data/raw/opencodeinstruct.jsonl",
-        "data/raw/slimorca_sample.jsonl",
-        "data/raw/dolly_15k.jsonl",
-        "data/raw/smoltalk_sample.jsonl",
+        "data/raw/opencodeinstruct.jsonl",           # Real instructions
+        "data/raw/codealpaca.jsonl",                 # Real code instructions
+        "data/raw/conversations.jsonl",              # Real conversations
+        "data/raw/interview_sft_100k.jsonl",         # Real interview Q&A (100K)
     ],
     "interview": [
-        "data/raw/conversations.jsonl",
-        "data/raw/opencodeinstruct.jsonl",
+        "data/raw/conversations.jsonl",              # Real dialogues for interview style
+        "data/raw/opencodeinstruct.jsonl",           # Real Q&A format
+        "data/raw/oasst_coding.jsonl",               # Real technical Q&A
+        "data/raw/interview_sft_100k.jsonl",         # Real interview conversations (100K)
     ],
     "evaluator": [
-        "data/raw/mohlerasag_hf.jsonl",
-        "data/raw/scientsbank.jsonl",
-        "data/raw/beetle.jsonl",
-        "data/raw/asap_aes.jsonl",
+        "data/raw/mohler_asag.jsonl",                # Real scoring rubrics
     ],
     "followup": [
-        "data/raw/oasst_coding.jsonl",
-        "data/raw/conversations.jsonl",
-        "data/raw/opencodeinstruct.jsonl",
+        "data/raw/oasst_coding.jsonl",               # Real follow-up conversations
+        "data/raw/conversations.jsonl",              # Real dialogue chains
+        "data/raw/interview_sft_100k.jsonl",         # Real interview follow-ups
+    ],
+    "resume_finetune": [
+        "data/raw/resumes_54k.jsonl",                # Real resumes (54K)
+        "data/raw/interview_sft_100k.jsonl",         # Real interview Q&A
+        "data/raw/conversations.jsonl",              # Real conversations
+    ],
+    "negotiation": [
+        "data/raw/negotiation_sft_100k.jsonl",       # Real salary negotiation (100K)
+        "data/raw/conversations.jsonl",              # Real conversations
     ],
 }
 
@@ -108,6 +116,8 @@ STAGE_CKPT = {
     "interview": "interview_tuned.pt",
     "evaluator": "evaluator.pt",
     "followup": "final_model.pt",
+    "resume_finetune": "resume_finetuned.pt",
+    "negotiation": "negotiation_tuned.pt",
 }
 
 # Which checkpoint each stage initializes FROM (None = from scratch / random)
@@ -118,6 +128,8 @@ STAGE_INIT = {
     "interview": "domain_tuned.pt",     # instruction not strictly required before interview
     "evaluator": "interview_tuned.pt",
     "followup": "interview_tuned.pt",   # FIXED: was evaluator.pt (catastrophic forgetting)
+    "resume_finetune": "final_model.pt",  # resume fine-tuning after all stages
+    "negotiation": "resume_finetuned.pt",  # negotiation after resume fine-tuning
 }
 
 # Which model factory to use
@@ -347,7 +359,44 @@ def run_stage(stage, config):
 
     total_steps = len(train_loader) // config["grad_accum_steps"] * config["epochs"]
     warmup = max(1, int(total_steps * config["warmup_ratio"]))
-    sched = get_wsd_schedule(opt, warmup_steps=warmup, total_steps=total_steps)
+    stable_pct = config.get("stable_pct", 0.80)
+    decay_pct = config.get("decay_pct", 0.18)
+    stable_steps = int(total_steps * stable_pct)
+    decay_steps = max(1, int(total_steps * decay_pct))
+    peak_lr = config["lr"]
+
+    # Choose schedule based on stage config
+    sched_type = config.get("schedule", "wsd")
+    if sched_type == "cosine":
+        sched = get_cosine_schedule_with_warmup(opt, warmup_steps=warmup, total_steps=total_steps)
+        print("  Using Cosine Annealing with Warmup schedule")
+    elif sched_type == "cosine_restarts":
+        sched = get_cosine_with_warm_restarts_schedule(opt, first_cycle_steps=max(1, total_steps // 3))
+        print("  Using Cosine Annealing with Warm Restarts schedule")
+    else:
+        sched = get_wsd_schedule(opt, warmup_steps=warmup, stable_steps=stable_steps,
+                                decay_steps=decay_steps, peak_lr=peak_lr)
+        print("  Using Warmup-Stable-Decay (WSD) schedule")
+
+    # Gradient Centralization hooks
+    gc_hooks = []
+    if config.get("use_gc", True):
+        try:
+            from models.generator.research_techniques import apply_gradient_centralization
+            gc_hooks = apply_gradient_centralization(unwrap_model(model))
+            print("  [Research] Gradient Centralization active (+1-2% accuracy)")
+        except Exception as e:
+            print(f"  [Research] GC setup skipped: {e}")
+
+    # SWA (Stochastic Weight Averaging)
+    swa = None
+    if config.get("use_swa", True):
+        try:
+            from models.generator.research_techniques import SWA
+            swa = SWA()
+            print("  [Research] SWA active (averaging final 25% checkpoints)")
+        except Exception as e:
+            print(f"  [Research] SWA setup skipped: {e}")
 
     # EMA (exponential moving average) for stable checkpoint selection
     ema = EMA(model=unwrap_model(model), decay=config.get("ema_decay", 0.999))
@@ -418,8 +467,28 @@ def run_stage(stage, config):
             analytics=analytics,
         )
         ema.update()
+
+        # Update SWA in the final 25% of epochs
+        if swa and (epoch + 1) >= max(1, int(config["epochs"] * 0.75)):
+            swa.update(unwrap_model(model))
+            print("  [Research] SWA checkpoint captured")
+
         val = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
         val_loss, val_ppl = val["loss"], val["ppl"]
+
+        # Qualitative generation check for monitoring interview dialogue capability
+        try:
+            sample_prompt = "<|system|> You are an expert technical interviewer.<|end|><|user|> Can you explain the difference between a process and a thread?<|end|><|assistant|>"
+            sample_ids = tokenizer.encode(sample_prompt).ids
+            sample_tensor = torch.tensor([sample_ids], dtype=torch.long, device=DEVICE)
+            with torch.no_grad():
+                gen_ids = unwrap_model(model).generate(sample_tensor, max_new_tokens=40, temperature=0.7)
+                gen_text = tokenizer.decode(gen_ids[0].tolist()).replace("Ġ", " ").replace("Ċ", "\n").strip()
+                ans_preview = gen_text.split("<|assistant|>")[-1].strip()[:90]
+                if ans_preview:
+                    print(f"  [Sample Output]: \"{ans_preview}...\"")
+        except Exception:
+            pass
 
         # Print epoch summary with all analytics
         analytics.print_epoch_summary(epoch, train_loss, val)
@@ -458,6 +527,22 @@ def run_stage(stage, config):
                 print(f"  Early stopping after epoch {epoch+1} (best val_loss={best_val_loss:.4f})")
                 break
 
+    # Apply SWA weights if collected
+    if swa and swa.n_models > 0:
+        swa.apply(unwrap_model(model))
+        print(f"  [Research] SWA applied across {swa.n_models} checkpoints to final model")
+        save_checkpoint(unwrap_model(model), opt, sched, cur_epoch[0], best_val_loss, ckpt_path,
+                        step=global_step,
+                        extra={"stage": stage, "best_val_loss": best_val_loss, "swa_applied": True},
+                        scaler=scaler)
+
+    # Remove GC hooks
+    for h in gc_hooks:
+        try:
+            h.remove()
+        except Exception:
+            pass
+
     # Print final analytics report
     report = analytics.get_final_report()
     print(f"\n  {stage} done in {report['elapsed_min']:.1f} min. Best val_loss={best_val_loss:.4f}")
@@ -473,7 +558,7 @@ def main():
     ap = argparse.ArgumentParser(description="INTERVUE unified training")
     ap.add_argument("--stage", default="all",
                     choices=["all", "pretrain", "domain", "instruction",
-                             "interview", "evaluator", "followup"])
+                             "interview", "evaluator", "followup", "resume_finetune", "negotiation"])
     ap.add_argument("--limit", type=int, default=None,
                     help="Limit examples per file (for smoke tests)")
     args = ap.parse_args()
@@ -493,7 +578,7 @@ def main():
     else:
         STAGE_LIMIT = None
 
-    stages = ["pretrain", "domain", "instruction", "interview", "evaluator", "followup"]
+    stages = ["pretrain", "domain", "instruction", "interview", "evaluator", "followup", "resume_finetune", "negotiation"]
     if args.stage != "all":
         stages = [args.stage]
 

@@ -1,104 +1,171 @@
-# INTERVUE — Running Training on Kaggle
+# INTERVUE - Kaggle Training Guide
 
-This guide covers the **only** realistic way to train the heavy stages
-(pretrain, domain, instruction) given the local GPU is a GTX 1650 with 4GB VRAM.
+## Quick Start (5 minutes)
 
-Local training is feasible only for stages with small data (interview/evaluator/followup
-with `--limit` for smoke tests). Everything else: **use Kaggle**.
+### Step 1: Upload Dataset to Kaggle
+1. Go to [kaggle.com](https://kaggle.com) → **Datasets** → **New Dataset**
+2. Upload the folder containing all files from `data/raw/`
+3. Name it `intervai-data`
+4. Make sure it contains these files:
+   - `starcoder_large.jsonl` (1.7GB)
+   - `codesearchnet.jsonl` (187MB)
+   - `codefeedback.jsonl` (120MB)
+   - `opencodeinstruct.jsonl` (1.2GB)
+   - `conversations.jsonl` (299MB)
+   - `oasst_coding.jsonl` (23MB)
+   - `codealpaca.jsonl` (7MB)
+   - `cruxeval/cruxeval.jsonl` (181KB)
+   - `mohler_asag.jsonl` (913KB)
 
----
+### Step 2: Create Kaggle Notebook
+1. Go to **Code** → **New Notebook**
+2. Settings → **Accelerator** → **GPU T4 x2** (or P100)
+3. Internet → **On** (needed for git clone)
 
-## 1. Prepare the data as a Kaggle Dataset
+### Step 3: Add Dataset
+1. **Add Data** → search for `intervai-data`
+2. Click **Add** (it will appear at `/kaggle/input/intervai-data/`)
 
-1. Upload your real data files to Kaggle as a Dataset (or use the API):
-
-   ```bash
-   kaggle datasets init -p data/raw
-   # edit dataset-metadata.json (slug, title)
-   kaggle datasets create -p data/raw
-   ```
-
-2. Files land in `/kaggle/input/<dataset-slug>/...`. The unified trainer
-   (`models/generator/train.py`) scans `/kaggle/input` recursively, so it finds
-   them automatically by filename.
-
----
-
-## 2. Create the notebook
-
-1. **New Notebook** → Settings → **Accelerator: GPU T4 x2** (or P100).
-2. **Add Data** → your uploaded dataset from step 1.
-3. In the first cell:
-
-   ```python
-   !git clone https://github.com/<YOUR_USER>/IntervAI.git /kaggle/working/IntervAI
-   !python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all
-   ```
-
-   (Or open `kaggle/train_on_kaggle.py` and run it directly in the notebook.)
-
----
-
-## 3. What happens (research-grade pipeline)
-
-- `env_config.py` detects `/kaggle/working` → **batch=16/GPU, accum=4, FP16,
-  large model (24.3M)**. On **2x T4** the model is wrapped in `DataParallel` so
-  both GPUs are used (global batch = 16 × 2 GPUs × 4 accum = 128).
-- Per stage, the trainer **auto-tunes**:
-  - **Batch-size profiler** — tries larger per-GPU batches until OOM, picks the max.
-  - **LR range test** — ramps LR exponentially, picks the best peak LR.
-  - **Early stopping** with best-checkpoint tracking.
-- Metrics: val loss, perplexity, **token accuracy + top-5 accuracy**, logged as
-  JSON to `results/<stage>.log`.
-- **Crash-safe checkpoints**: a `<stage>.resume` checkpoint is written every
-  `ckpt_every` optimizer steps (plus FP16 scaler state), so a Ctrl-C / session
-  timeout loses at most ~2000 steps, not a full epoch.
-- Curriculum fixes baked in: full-content SHA256 dedup (no more 200-char bug),
-  evaluator trains on **code feedback** data, and followup fine-tunes from
-  `interview_tuned.pt` (no catastrophic forgetting).
-- Override model size: `INTERVUE_MODEL=small|medium|large` (default on T4 = large).
-
----
-
-## 4. Downloading results
-
-After training, download the checkpoints back to your laptop:
+### Step 4: Run Training
+Paste this in a cell and run:
 
 ```python
-from IPython.display import FileLink
-FileLink('/kaggle/working/IntervAI/models/generator/saved/final_model.pt')
+!git clone https://github.com/atrishmanm/IntervAI.git /kaggle/working/IntervAI
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all --time-budget 480
 ```
 
-Or use the Kaggle API:
-```bash
-kaggle kernels output <your-kernel-slug> -p models/generator/saved
-```
-
-Copy them into `models/generator/saved/` locally.
+### Step 5: Download Checkpoints
+After training completes:
+1. Go to **Output** tab
+2. Find `/kaggle/working/IntervAI/models/generator/saved/`
+3. Download all `.pt` files
 
 ---
 
-## 5. Local smoke test (before any Kaggle run)
+## Resume After Timeout
 
-Verify the pipeline works end-to-end on your laptop first (CPU is fine for a few samples):
+If training times out (9 hours max on Kaggle):
 
-```bash
-python models/generator/train.py --stage pretrain --limit 20
-python models/generator/train.py --stage interview --limit 20
+```python
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all --resume
 ```
 
-These use batch=1, no FP16, and finish in ~1 minute each (auto-tuning is
-skipped on CPU).
+Checkpoints are saved after each stage, so you can resume from where it stopped.
+
+---
+
+## Train Single Stage
+
+```python
+# Train only the interview stage
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage interview
+
+# Available stages: pretrain, domain, instruction, interview, evaluator, followup, resume_finetune, negotiation
+```
+
+---
+
+## Time Budget
+
+Default: 480 minutes (8 hours). Adjust if needed:
+
+```python
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all --time-budget 420  # 7 hours
+```
+
+---
+
+## Dataset Requirements
+
+All datasets must be REAL (no synthetic data):
+
+| File | Source | Size | Stage |
+|------|--------|------|-------|
+| starcoder_large.jsonl | BigCode | 1.7GB | pretrain |
+| codesearchnet.jsonl | Microsoft | 187MB | pretrain |
+| codefeedback.jsonl | Various | 120MB | pretrain |
+| cruxeval/cruxeval.jsonl | Facebook | 181KB | pretrain |
+| opencodeinstruct.jsonl | HuggingFace | 1.2GB | domain, instruction, interview |
+| oasst_coding.jsonl | OpenAssistant | 23MB | domain, interview, followup |
+| codealpaca.jsonl | Various | 7MB | domain, instruction |
+| conversations.jsonl | Various | 299MB | instruction, interview, followup, resume_finetune, negotiation |
+| mohler_asag.jsonl | Mohler et al. | 913KB | evaluator |
+
+---
+
+## Training Stages
+
+| Stage | Purpose | Data | Time Est. |
+|-------|---------|------|-----------|
+| pretrain | General code understanding | starcoder, codesearchnet, cruxeval, codefeedback | ~90 min |
+| domain | CS-specific knowledge | opencodeinstruct, oasst_coding, codealpaca | ~60 min |
+| instruction | Instruction following | opencodeinstruct, codealpaca, conversations | ~60 min |
+| interview | Interview dialogue | conversations, opencodeinstruct, oasst_coding | ~60 min |
+| evaluator | Answer evaluation | mohler_asag | ~30 min |
+| followup | Follow-up questions | oasst_coding, conversations | ~45 min |
+| resume_finetune | Resume-specific Q&A | conversations, opencodeinstruct | ~45 min |
+| negotiation | Salary negotiation | conversations, opencodeinstruct | ~45 min |
+| **Total** | | | **~7 hours** |
+
+---
+
+## Checkpoints
+
+Checkpoints are saved to `/kaggle/working/IntervAI/models/generator/saved/`:
+
+- `pretrained.pt` - After pretrain stage
+- `domain_tuned.pt` - After domain stage
+- `instruction_tuned.pt` - After instruction stage
+- `interview_tuned.pt` - After interview stage
+- `evaluator.pt` - After evaluator stage
+- `final_model.pt` - After followup stage
+- `resume_finetuned.pt` - After resume_finetune stage
+- `negotiation_tuned.pt` - After negotiation stage (final)
+- `training_progress.json` - Training progress tracking
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
-| `No usable data found` | Data not mounted — check `/kaggle/input` contents, re-add the dataset |
-| OOM on Kaggle | Batch profiler auto-shrinks to fit; if still OOM set `INTERVUE_MODEL=medium` |
-| Session timeout | Resume is automatic — just rerun the script (mid-epoch resume saves ~2000 steps) |
-| `Tokenizer not found` | Run the tokenizer cell first, or upload your locally-trained `tokenizer.json` |
-| Repo clone fails | `github.com/<YOUR_USER>` — replace with your actual repo URL |
-| Checkpoint size mismatch after `INTERVUE_MODEL` change | Different model sizes store different shapes — retrain or set the same size as before |
+### CUDA Out of Memory
+The script auto-selects model size based on GPU:
+- 4GB VRAM → Small (13.6M params)
+- 8GB VRAM → Medium (46.7M params)
+- 12GB+ VRAM → Large (125.6M params)
+
+If still OOM, set environment variable:
+```python
+os.environ["INTERVUE_MODEL"] = "medium"
+```
+
+### Training Fails on a Stage
+The script continues to next stage even if one fails. Check `training_progress.json` for status.
+
+### Time Runs Out
+Use `--resume` flag to continue from last checkpoint:
+```python
+!python /kaggle/working/IntervAI/kaggle/train_on_kaggle.py --stage all --resume
+```
+
+### Dataset Not Found
+Make sure your dataset is named `intervai-data` and added to the notebook.
+
+---
+
+## Using the Trained Model
+
+After training, use the checkpoint with the interview engine:
+
+```python
+from models.generator.model import create_large_model, GeneratorConfig
+from models.generator.train_utils import load_checkpoint
+
+# Load model
+config = GeneratorConfig()
+model = create_large_model(config)
+load_checkpoint(model, None, None, path="models/generator/saved/negotiation_tuned.pt")
+
+# Use with interview engine
+from orchestrator.mock_interview import MockInterviewSimulator
+simulator = MockInterviewSimulator(model=model)
+```

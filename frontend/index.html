@@ -3,569 +3,2033 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Interview Prep</title>
-  <meta name="description" content="Strict, analytical technical interview practice." />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <title>IntervAI — Research-Grade AI Interview & Negotiation Engine</title>
+  <meta name="description" content="State-of-the-art AI interview simulation, company-tailored technical evaluations, STAR behavioral scoring, and real-time salary negotiation practice." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      /* ChatGPT-style Grayscale Theme */
-      --bg:         #212121;
-      --surface:    #2f2f2f;
-      --surface2:   #3a3a3a;
-      --border:     #424242;
+      --bg: #070b14;
+      --bg-surface: #0d1424;
+      --bg-card: rgba(17, 26, 46, 0.75);
+      --bg-glass: rgba(25, 36, 64, 0.45);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-focus: rgba(99, 102, 241, 0.6);
       
-      --accent:     #ececec; /* Soft white */
-      
-      /* Semantic colors (muted for dark theme) */
-      --green:      #4ade80;
-      --green-bg:   rgba(74, 222, 128, 0.1);
-      --amber:      #facc15;
-      --amber-bg:   rgba(250, 204, 21, 0.1);
-      --red:        #f87171;
-      --red-bg:     rgba(248, 113, 113, 0.1);
-      
-      --text:       #ececec;
-      --text-muted: #a3a3a3;
-      
-      --font:       'Inter', system-ui, sans-serif;
-      --mono:       'JetBrains Mono', monospace;
-      --radius:     8px;
-      --transition: 0.15s ease;
+      --indigo: #6366f1;
+      --indigo-glow: rgba(99, 102, 241, 0.25);
+      --violet: #8b5cf6;
+      --cyan: #06b6d4;
+      --emerald: #10b981;
+      --emerald-bg: rgba(16, 185, 129, 0.12);
+      --amber: #f59e0b;
+      --amber-bg: rgba(245, 158, 11, 0.12);
+      --rose: #f43f5e;
+      --rose-bg: rgba(244, 63, 94, 0.12);
+
+      --text: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --transition: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15px; line-height: 1.6; }
-
-    #app { display: flex; flex-direction: column; height: 100vh; max-width: 850px; margin: 0 auto; }
-
-    /* Header */
-    header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg); flex-shrink: 0; }
-    .header-left { display: flex; align-items: center; gap: 12px; }
-    .logo { width: 32px; height: 32px; background: var(--text); color: var(--bg); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; }
-    h1 { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
-    
-    #status-badge { font-size: 0.72rem; padding: 4px 10px; border-radius: 4px; font-weight: 600; text-transform: uppercase; border: 1px solid var(--border); }
-    .badge-ready   { color: var(--green); border-color: var(--green); background: var(--green-bg); }
-    .badge-offline { color: var(--text-muted); }
-
-    /* Stats bar */
-    #stats-bar { display: flex; gap: 24px; padding: 12px 24px; background: var(--bg); border-bottom: 1px solid var(--border); font-size: 0.85rem; color: var(--text-muted); flex-shrink: 0; }
-    .stat { display: flex; align-items: center; gap: 6px; }
-    .stat-val { color: var(--text); font-weight: 600; }
-
-    /* Setup panel */
-    #setup-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
-    .setup-card { background: var(--bg); padding: 40px; width: 100%; max-width: 500px; text-align: left; }
-    .setup-card h2 { font-size: 1.6rem; font-weight: 600; margin-bottom: 12px; color: var(--text); }
-    .setup-card p { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 32px; line-height: 1.7; }
-    
-    .feature-list { margin-bottom: 32px; border-left: 2px solid var(--border); padding-left: 20px; }
-    .feature-list li { list-style: none; padding: 8px 0; font-size: 0.9rem; color: var(--text); display: flex; flex-direction: column; }
-    .feature-list li span { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; }
-
-    /* Buttons */
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; font-weight: 500; font-family: var(--font); cursor: pointer; transition: all var(--transition); background: var(--surface); color: var(--text); }
-    .btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); width: 100%; font-weight: 600; }
-    .btn-primary:hover { background: #d4d4d4; }
-    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-ghost { background: transparent; }
-    .btn-ghost:hover { background: var(--surface); }
-
-    /* Chat area */
-    #chat-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-    #messages { flex: 1; overflow-y: auto; padding: 24px 24px 40px 24px; display: flex; flex-direction: column; gap: 32px; scroll-behavior: smooth; }
-
-    /* Question bubble (AI) */
-    .msg-card { display: flex; flex-direction: column; gap: 8px; animation: fadeUp 0.2s ease; max-width: 100%; }
-    .msg-header { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
-    .msg-icon { width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
-    .ai-icon { background: var(--text); color: var(--bg); font-weight: bold; }
-    .user-icon { background: var(--surface2); color: var(--text); }
-    
-    .q-meta { font-size: 0.75rem; font-weight: normal; color: var(--text-muted); background: var(--surface); padding: 2px 8px; border-radius: 4px; }
-    
-    .msg-text { font-size: 0.95rem; line-height: 1.7; white-space: pre-wrap; color: var(--text); }
-    .msg-text code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.85rem; color: #d4d4d4; }
-    .msg-text pre { background: #000; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin: 12px 0; font-family: var(--mono); font-size: 0.85rem; overflow-x: auto; line-height: 1.5; color: #e5e5e5; }
-
-    /* User bubble */
-    .user-bubble { background: var(--surface); padding: 16px 20px; border-radius: var(--radius); align-self: flex-end; max-width: 85%; }
-    .user-bubble .msg-text { color: var(--text); }
-
-    /* Report Card */
-    .report-card { background: transparent; border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-top: 8px; }
-    .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-    .report-title { font-size: 0.9rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
-    .report-title::before { content: ''; display: inline-block; width: 4px; height: 16px; background: var(--text-muted); border-radius: 2px; }
-    
-    .report-score { font-size: 1.4rem; font-weight: 700; display: flex; align-items: baseline; gap: 6px; }
-    .report-score span { font-size: 0.8rem; font-weight: 400; color: var(--text-muted); }
-    .score-correct { color: var(--green); }
-    .score-partial { color: var(--amber); }
-    .score-incorrect { color: var(--red); }
-
-    .check-list { list-style: none; margin-bottom: 24px; display: grid; gap: 12px; }
-    .check-item { display: flex; align-items: flex-start; gap: 12px; font-size: 0.9rem; line-height: 1.5; }
-    .check-icon { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; margin-top: 2px; font-weight: bold; }
-    .check-pass    .check-icon { color: var(--green); background: var(--green-bg); }
-    .check-partial .check-icon { color: var(--amber); background: var(--amber-bg); }
-    .check-fail    .check-icon { color: var(--red); background: var(--red-bg); }
-    .check-content { display: flex; flex-direction: column; }
-    .check-label { font-weight: 500; color: var(--text); }
-    .check-detail { color: var(--text-muted); font-size: 0.85rem; }
-
-    .ref-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
-    .ref-title { font-size: 0.8rem; font-weight: 600; color: var(--text); margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
-    .ref-text { font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; white-space: pre-wrap; }
-
-    .followup { font-size: 0.95rem; color: var(--text); font-weight: 500; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
-
-    @keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-
-    /* Typing indicator */
-    .typing-indicator { display: flex; align-items: center; gap: 4px; padding: 8px 0; }
-    .dot { width: 6px; height: 6px; background: var(--text-muted); border-radius: 50%; animation: bounce 1.2s infinite; }
-    .dot:nth-child(2) { animation-delay: 0.2s; }
-    .dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
-
-    /* Input area */
-    #input-area { padding: 20px 24px; background: var(--bg); flex-shrink: 0; }
-    .input-wrapper { display: flex; gap: 12px; align-items: flex-end; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; transition: border-color var(--transition); }
-    .input-wrapper:focus-within { border-color: #666; }
-    
-    #answer-input { flex: 1; min-height: 44px; max-height: 200px; padding: 10px 12px; background: transparent; border: none; color: var(--text); font-size: 0.95rem; font-family: var(--font); line-height: 1.5; resize: none; outline: none; }
-    #answer-input::placeholder { color: #666; }
-    
-    .input-actions { display: flex; gap: 8px; padding-bottom: 4px; padding-right: 4px; }
-    .icon-btn { width: 36px; height: 36px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: all 0.2s; }
-    .icon-btn:hover { background: var(--surface2); color: var(--text); }
-    #send-btn { background: var(--text); color: var(--bg); }
-    #send-btn:hover { background: #d4d4d4; }
-    
-    #mic-btn.listening { color: var(--red); background: var(--red-bg); animation: pulse 1.5s infinite; }
-    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-    
-    #hint-text { font-size: 0.75rem; color: #666; margin-top: 8px; text-align: center; }
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 15% 15%, rgba(99, 102, 241, 0.12) 0px, transparent 50%),
+        radial-gradient(at 85% 85%, rgba(16, 185, 129, 0.08) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(139, 92, 246, 0.06) 0px, transparent 50%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
 
     /* Scrollbar */
-    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #555; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+    /* Top Navigation */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 32px;
+      background: rgba(13, 20, 36, 0.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+    }
+
+    .logo-badge {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--indigo), var(--violet));
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 16px;
+      color: #fff;
+      box-shadow: 0 0 16px var(--indigo-glow);
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .version-tag {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 8px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    .nav-tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 4px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all var(--transition);
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .tab-btn.active {
+      color: #fff;
+      background: var(--indigo);
+      box-shadow: 0 2px 10px var(--indigo-glow);
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--emerald);
+      box-shadow: 0 0 8px var(--emerald);
+      animation: pulseDot 2s infinite;
+    }
+
+    @keyframes pulseDot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.2); opacity: 0.6; }
+    }
+
+    /* Container */
+    .app-container {
+      flex: 1;
+      max-width: 1200px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 32px 24px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Common Card Styling */
+    .glass-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all var(--transition);
+      border: 1px solid transparent;
+      outline: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--indigo), var(--violet));
+      color: #fff;
+      box-shadow: 0 4px 15px var(--indigo-glow);
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn-secondary {
+      background: var(--bg-glass);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-emerald {
+      background: linear-gradient(135deg, var(--emerald), #059669);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(16, 185, 129, 0.25);
+    }
+    .btn-emerald:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-danger {
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      color: var(--rose);
+    }
+
+    /* Form Controls */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .form-input, .form-select, .form-textarea {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 12px 16px;
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      transition: all var(--transition);
+      outline: none;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--indigo-glow);
+    }
+
+    /* =================================================================
+       VIEW 1: MOCK INTERVIEW SETUP
+       ================================================================= */
+    #view-interview-setup {
+      max-width: 860px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .hero-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .hero-title {
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #fff 40%, var(--indigo) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+    }
+    .hero-subtitle {
+      color: var(--text-secondary);
+      font-size: 1rem;
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    .company-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .company-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 10px;
+      text-align: center;
+      cursor: pointer;
+      transition: all var(--transition);
+      user-select: none;
+    }
+    .company-card:hover {
+      border-color: var(--indigo);
+      background: rgba(99, 102, 241, 0.08);
+      transform: translateY(-2px);
+    }
+    .company-card.selected {
+      border-color: var(--indigo);
+      background: rgba(99, 102, 241, 0.18);
+      box-shadow: 0 0 12px var(--indigo-glow);
+    }
+    .company-card .comp-icon { font-size: 1.4rem; margin-bottom: 4px; display: block; }
+    .company-card .comp-name { font-size: 0.85rem; font-weight: 600; color: #fff; }
+    .company-card .comp-bar { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; margin-top: 2px; }
+
+    /* Dropzone */
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius-md);
+      padding: 32px 20px;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.2);
+      cursor: pointer;
+      transition: all var(--transition);
+      position: relative;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--indigo);
+      background: rgba(99, 102, 241, 0.05);
+    }
+    .dropzone-icon {
+      font-size: 2.2rem;
+      color: var(--indigo);
+      margin-bottom: 8px;
+    }
+    .dropzone-title { font-weight: 600; margin-bottom: 4px; }
+    .dropzone-subtitle { font-size: 0.8rem; color: var(--text-muted); }
+
+    .tabs-subnav {
+      display: flex;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .subnav-tab {
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .subnav-tab.active {
+      color: var(--indigo);
+      border-bottom-color: var(--indigo);
+      font-weight: 600;
+    }
+
+    /* =================================================================
+       VIEW 2: LIVE INTERVIEW WORKSPACE
+       ================================================================= */
+    #view-interview-live {
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .interview-hud {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px 20px;
+    }
+    .hud-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .badge-pill {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+    }
+    .badge-warmup { background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3); }
+    .badge-technical { background: var(--emerald-bg); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-behavioral { background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-wrap_up { background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, 0.3); }
+
+    .diff-pill {
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-secondary);
+    }
+    .diff-easy { color: var(--emerald); }
+    .diff-medium { color: var(--cyan); }
+    .diff-hard { color: var(--amber); }
+    .diff-expert { color: var(--rose); }
+
+    .timer-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .timer-box.warning { color: var(--rose); animation: pulse 1s infinite; }
+
+    .question-card {
+      position: relative;
+      border-left: 4px solid var(--indigo);
+    }
+    .q-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .q-number {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--indigo);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .btn-tts {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all var(--transition);
+    }
+    .btn-tts:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+    .q-text {
+      font-size: 1.15rem;
+      font-weight: 600;
+      line-height: 1.6;
+      color: #fff;
+    }
+
+    /* Response Console */
+    .answer-console {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .answer-textarea {
+      min-height: 180px;
+      background: rgba(13, 20, 36, 0.85);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      line-height: 1.6;
+      resize: vertical;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+    .answer-textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px var(--indigo-glow);
+    }
+
+    .console-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .console-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Voice Wave Visualizer */
+    .mic-button {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      transition: all var(--transition);
+      position: relative;
+    }
+    .mic-button:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+    }
+    .mic-button.recording {
+      background: var(--rose-bg);
+      border-color: var(--rose);
+      color: var(--rose);
+      box-shadow: 0 0 16px rgba(244, 63, 94, 0.4);
+      animation: pulseMic 1.5s infinite;
+    }
+    @keyframes pulseMic {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
+
+    /* Evaluation Cards Feed */
+    .eval-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 10px;
+    }
+    .eval-card {
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      animation: slideDown 0.3s ease;
+    }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .eval-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .score-badge-circle {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      font-weight: 800;
+      font-size: 1.4rem;
+    }
+    .score-badge-circle span { font-size: 0.8rem; font-weight: 400; color: var(--text-muted); }
+
+    .star-progress-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin: 14px 0;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 12px;
+      border-radius: var(--radius-sm);
+    }
+    .star-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .star-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+    .star-track {
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .star-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--indigo), var(--emerald));
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+
+    .dimensions-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .dim-chip {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dim-val { font-weight: 700; color: #fff; font-family: var(--font-mono); }
+
+    /* =================================================================
+       VIEW 3: COMPREHENSIVE REPORT & RADAR
+       ================================================================= */
+    #view-interview-report {
+      display: none;
+      flex-direction: column;
+      gap: 24px;
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .report-hero {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      align-items: center;
+    }
+    @media (max-width: 768px) {
+      .report-hero { grid-template-columns: 1fr; }
+    }
+
+    .verdict-box {
+      text-align: left;
+    }
+    .verdict-tag {
+      display: inline-block;
+      padding: 6px 16px;
+      border-radius: 999px;
+      font-weight: 800;
+      font-size: 0.9rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .verdict-strong_hire { background: var(--emerald-bg); color: var(--emerald); border: 1px solid var(--emerald); }
+    .verdict-hire { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid var(--indigo); }
+    .verdict-leaning_hire { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
+    .verdict-no_hire { background: var(--rose-bg); color: var(--rose); border: 1px solid var(--rose); }
+
+    .overall-score-display {
+      font-size: 3.6rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+    .radar-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 280px;
+    }
+
+    .report-sections-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 768px) {
+      .report-sections-grid { grid-template-columns: 1fr; }
+    }
+
+    .recs-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .recs-item {
+      font-size: 0.85rem;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .recs-icon { color: var(--indigo); font-weight: bold; }
+
+    /* =================================================================
+       VIEW 4: SALARY NEGOTIATION SIMULATOR
+       ================================================================= */
+    #view-negotiation {
+      display: none;
+      flex-direction: column;
+      gap: 24px;
+      max-width: 1000px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .nego-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .kpi-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px 20px;
+    }
+    .kpi-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .kpi-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+      font-family: var(--font-mono);
+    }
+    .kpi-sub {
+      font-size: 0.75rem;
+      color: var(--emerald);
+      margin-top: 2px;
+    }
+
+    .nego-workspace {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 20px;
+    }
+    @media (max-width: 860px) {
+      .nego-workspace { grid-template-columns: 1fr; }
+    }
+
+    .chat-stream {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      height: 440px;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .chat-bubble {
+      max-width: 80%;
+      padding: 14px 18px;
+      border-radius: var(--radius-md);
+      font-size: 0.92rem;
+      line-height: 1.5;
+      animation: slideDown 0.2s ease;
+    }
+    .chat-bubble.recruiter {
+      align-self: flex-start;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 2px;
+    }
+    .chat-bubble.candidate {
+      align-self: flex-end;
+      background: linear-gradient(135deg, var(--indigo), #4f46e5);
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+    .bubble-meta {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+    }
+    .candidate .bubble-meta { color: rgba(255, 255, 255, 0.7); }
+
+    .tactic-tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .sidebar-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* =================================================================
+       VIEW 5: ANALYTICS & HISTORY
+       ================================================================= */
+    #view-analytics {
+      display: none;
+      flex-direction: column;
+      gap: 24px;
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    .history-table th {
+      text-align: left;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+    }
+    .history-table td {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--text-secondary);
+    }
+    .history-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text);
+    }
+
+    /* Loading Overlay */
+    .loader-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(7, 11, 20, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(99, 102, 241, 0.2);
+      border-top-color: var(--indigo);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
 
-<div id="app">
+  <!-- Loading Overlay -->
+  <div id="loader" class="loader-overlay">
+    <div class="spinner"></div>
+    <div id="loader-text" style="font-size:0.95rem; font-weight:600; color:#e2e8f0;">Analyzing with Neural Evaluator...</div>
+  </div>
+
+  <!-- Header -->
   <header>
-    <div class="header-left">
-      <div class="logo">AI</div>
-      <h1>Interview Prep</h1>
+    <div class="brand" onclick="switchTab('interview-setup')">
+      <div class="logo-badge">IA</div>
+      <div class="brand-title">
+        IntervAI
+        <span class="version-tag">SOTA v4.0</span>
+      </div>
     </div>
-    <span id="status-badge" class="badge-offline">Checking...</span>
+
+    <nav class="nav-tabs">
+      <button id="nav-btn-interview" class="tab-btn active" onclick="switchTab('interview-setup')">
+        <span>🎯</span> Mock Interview
+      </button>
+      <button id="nav-btn-nego" class="tab-btn" onclick="switchTab('negotiation')">
+        <span>💼</span> Salary Negotiation
+      </button>
+      <button id="nav-btn-analytics" class="tab-btn" onclick="switchTab('analytics')">
+        <span>📊</span> Performance Trends
+      </button>
+    </nav>
+
+    <div class="status-pill">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="status-text">Connecting...</span>
+    </div>
   </header>
 
-  <div id="stats-bar" style="display:none;">
-    <div class="stat">Questions: <span id="stat-q" class="stat-val">0</span> / 10</div>
-    <div class="stat">Average Score: <span id="stat-score" class="stat-val">-</span></div>
-  </div>
+  <!-- Main Container -->
+  <main class="app-container">
 
-  <div id="setup-panel">
-    <div class="setup-card">
-      <h2>Technical Interview</h2>
-      <p>A rigorous, highly analytical interview environment trained on 100,000 real coding interviews. Focus on algorithmic patterns, complexity, and constraints.</p>
-      <ul class="feature-list">
-        <li><strong>5-Factor Evaluation</strong> <span>Analyzes Algorithm, Time, Space, Edge Cases, and Depth.</span></li>
-        <li><strong>Factual References</strong> <span>Matches your answer against real expert transcripts.</span></li>
-        <li><strong>Strict Scoring</strong> <span>No fluff. Just structured analysis of your technical communication.</span></li>
-      </ul>
-      <button id="start-btn" class="btn btn-primary" onclick="startSession()">Start Session</button>
-    </div>
-  </div>
+    <!-- ============================================================
+         1. MOCK INTERVIEW SETUP VIEW
+         ============================================================ -->
+    <section id="view-interview-setup" class="glass-card">
+      <div class="hero-header">
+        <h1 class="hero-title">Adaptive Technical & Behavioral Interview</h1>
+        <p class="hero-subtitle">
+          Engineered to simulate real FAANG / top-tier hiring loops. Adapts difficulty in real-time, scores answers via rubric & neural evaluation, and grades STAR method responses.
+        </p>
+      </div>
 
-  <div id="chat-panel" style="display:none; flex-direction:column;">
-    <div id="messages"></div>
-    <div id="input-area">
-      <div class="input-wrapper">
-        <textarea id="answer-input" placeholder="Message Interviewer..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
-        <div class="input-actions">
-          <button id="mic-btn" class="icon-btn" onclick="toggleRecording()" title="Voice Input">&#127908;</button>
-          <button id="send-btn" class="icon-btn" onclick="sendAnswer()" title="Send">&#8593;</button>
+      <div class="form-group">
+        <label class="form-label" for="candidate-name">Candidate Name</label>
+        <input type="text" id="candidate-name" class="form-input" placeholder="e.g. Alex Rivera" value="Alex Rivera" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Target Company & Interview Track</label>
+        <div class="company-grid" id="company-selector">
+          <div class="company-card selected" data-company="" onclick="selectCompany(this)">
+            <span class="comp-icon">🌐</span>
+            <div class="comp-name">General SDE</div>
+            <div class="comp-bar">Balanced Bar</div>
+          </div>
+          <div class="company-card" data-company="Google" onclick="selectCompany(this)">
+            <span class="comp-icon">🔍</span>
+            <div class="comp-name">Google</div>
+            <div class="comp-bar">Exceptional</div>
+          </div>
+          <div class="company-card" data-company="Meta" onclick="selectCompany(this)">
+            <span class="comp-icon">♾️</span>
+            <div class="comp-name">Meta</div>
+            <div class="comp-bar">Very High</div>
+          </div>
+          <div class="company-card" data-company="Amazon" onclick="selectCompany(this)">
+            <span class="comp-icon">📦</span>
+            <div class="comp-name">Amazon</div>
+            <div class="comp-bar">High (16 LP)</div>
+          </div>
+          <div class="company-card" data-company="Apple" onclick="selectCompany(this)">
+            <span class="comp-icon">🍏</span>
+            <div class="comp-name">Apple</div>
+            <div class="comp-bar">Exceptional</div>
+          </div>
+          <div class="company-card" data-company="Netflix" onclick="selectCompany(this)">
+            <span class="comp-icon">🍿</span>
+            <div class="comp-name">Netflix</div>
+            <div class="comp-bar">Senior Only</div>
+          </div>
+          <div class="company-card" data-company="Microsoft" onclick="selectCompany(this)">
+            <span class="comp-icon">🪟</span>
+            <div class="comp-name">Microsoft</div>
+            <div class="comp-bar">High</div>
+          </div>
+          <div class="company-card" data-company="Stripe" onclick="selectCompany(this)">
+            <span class="comp-icon">💳</span>
+            <div class="comp-name">Stripe</div>
+            <div class="comp-bar">Exceptional</div>
+          </div>
         </div>
       </div>
-      <div id="hint-text">Ctrl + Enter to send</div>
-    </div>
-  </div>
-</div>
 
-<script>
-  const API = 'http://localhost:8000';
-  let sessionId = null;
-  let isWaiting = false;
-  let questionsAsked = 0;
-  let totalScore = 0;
+      <div class="form-group" style="margin-top: 24px;">
+        <label class="form-label">Resume & Skill Profile</label>
+        <div class="tabs-subnav">
+          <div id="tab-upload-file" class="subnav-tab active" onclick="setResumeInputMode('file')">📄 Upload Document (.pdf, .docx, .txt)</div>
+          <div id="tab-upload-text" class="subnav-tab" onclick="setResumeInputMode('text')">✏️ Paste Resume Text</div>
+        </div>
 
-  window.addEventListener('DOMContentLoaded', checkStatus);
+        <!-- File Upload Dropzone -->
+        <div id="resume-file-pane">
+          <div class="dropzone" id="dropzone" onclick="document.getElementById('file-input').click()">
+            <input type="file" id="file-input" style="display:none" accept=".pdf,.docx,.txt,.md" onchange="handleFileSelected(this.files)" />
+            <div class="dropzone-icon">📁</div>
+            <div class="dropzone-title" id="dropzone-file-name">Click or drag & drop your resume file here</div>
+            <div class="dropzone-subtitle">Supports PDF, Word DOCX, Plain Text, or Markdown</div>
+          </div>
+        </div>
 
-  async function checkStatus() {
-    const badge = document.getElementById('status-badge');
-    try {
-      const res = await fetch(`${API}/api/status`);
-      const data = await res.json();
-      if (data.ready) {
-        badge.textContent = 'System Ready';
-        badge.className = 'badge-ready';
-      } else {
-        badge.textContent = 'Not Trained';
-        badge.className = 'badge-offline';
-      }
-    } catch {
-      badge.textContent = 'Offline';
-      badge.className = 'badge-offline';
-    }
-  }
-
-  async function startSession() {
-    const btn = document.getElementById('start-btn');
-    btn.disabled = true;
-    btn.textContent = 'Initializing...';
-
-    try {
-      const res = await fetch(`${API}/api/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
-
-      if (!res.ok) { alert('Failed to start session.'); return; }
-      const data = await res.json();
-      sessionId = data.session_id;
-
-      document.getElementById('setup-panel').style.display = 'none';
-      document.getElementById('chat-panel').style.display = 'flex';
-      document.getElementById('stats-bar').style.display = 'flex';
-
-      questionsAsked = 1;
-      updateStats();
-      renderQuestion(data);
-      document.getElementById('answer-input').focus();
-    } catch (e) {
-      alert('Could not connect to backend.');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Start Session';
-    }
-  }
-
-  async function sendAnswer() {
-    if (isWaiting || !sessionId) return;
-    const input = document.getElementById('answer-input');
-    const answer = input.value.trim();
-    if (!answer) return;
-
-    input.value = '';
-    autoResize(input);
-    isWaiting = true;
-
-    renderUserAnswer(answer);
-    const typingEl = renderTyping();
-
-    try {
-      const res = await fetch(`${API}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, answer }),
-      });
-
-      typingEl.remove();
-      if (!res.ok) { const err = await res.json(); renderError(err.detail); return; }
-
-      const data = await res.json();
-      questionsAsked = data.questions_asked || questionsAsked;
-
-      if (data.type === 'analysis_and_next') {
-        totalScore += data.report.score;
-        updateStats();
-        renderReport(data.report);
-        renderQuestion(data.next_question);
-        speakText(data.next_question.question_text);
-      } else if (data.type === 'session_complete') {
-        totalScore += data.report.score;
-        updateStats();
-        renderReport(data.report);
-        if (data.panel_report && !data.panel_report.error) {
-          renderPanelReport(data.panel_report);
-        }
-        renderSessionSummary(data.summary);
-        showSessionOver();
-      }
-    } catch (e) {
-      typingEl.remove();
-      renderError('Connection error.');
-    } finally {
-      isWaiting = false;
-    }
-  }
-
-  function updateStats() {
-    document.getElementById('stat-q').textContent = questionsAsked;
-    const avg = questionsAsked > 0 ? Math.round(totalScore / questionsAsked) : '-';
-    document.getElementById('stat-score').textContent = avg === '-' ? '-' : avg;
-  }
-
-  // ── Rendering ─────────────────────────────────────────────
-  function renderQuestion(q) {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'msg-card';
-
-    const typeLabel = {
-      'theoretical': 'Theoretical',
-      'output_prediction': 'Code Analysis',
-      'concept': 'Concept',
-    }[q.question_type] || q.question_type;
-
-    let qText = escapeHtml(q.question_text);
-    qText = qText.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre>${code}</pre>`);
-    qText = qText.replace(/`([^`]+)`/g, '<code>$1</code>');
-    qText = qText.replace(/\n/g, '<br>');
-
-    div.innerHTML = `
-      <div class="msg-header">
-        <div class="msg-icon ai-icon">AI</div>
-        <span>Interviewer</span>
-        <span class="q-meta">${typeLabel} &middot; ${q.topic}</span>
+        <!-- Text Paste Fallback -->
+        <div id="resume-text-pane" style="display:none;">
+          <textarea id="resume-text" class="form-textarea" rows="6" placeholder="Paste your resume work history, technical skills, and project experience here..."></textarea>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+            <button type="button" class="btn btn-secondary" style="font-size:0.75rem; padding:4px 10px;" onclick="loadSampleResume('backend')">Load Backend Sample</button>
+            <button type="button" class="btn btn-secondary" style="font-size:0.75rem; padding:4px 10px;" onclick="loadSampleResume('ml')">Load ML Sample</button>
+          </div>
+        </div>
       </div>
-      <div class="msg-text">${qText}</div>
-    `;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
 
-  function renderUserAnswer(text) {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'msg-card user-bubble';
-    div.innerHTML = `
-      <div class="msg-text">${escapeHtml(text)}</div>
-    `;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
+      <div style="margin-top: 32px; display: flex; justify-content: center;">
+        <button id="btn-start-interview" class="btn btn-primary" style="padding: 14px 40px; font-size: 1.05rem;" onclick="startInterview()">
+          Launch Personalized Interview →
+        </button>
+      </div>
+    </section>
 
-  function renderReport(report) {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'report-card';
+    <!-- ============================================================
+         2. LIVE INTERVIEW WORKSPACE VIEW
+         ============================================================ -->
+    <section id="view-interview-live">
+      <div class="interview-hud">
+        <div class="hud-meta">
+          <span id="hud-phase-badge" class="badge-pill badge-warmup">WARMUP</span>
+          <span id="hud-diff-pill" class="diff-pill diff-medium">MEDIUM</span>
+          <span id="hud-company-pill" style="font-size:0.8rem; color:var(--text-secondary);">General Track</span>
+          <span id="hud-counter" style="font-size:0.85rem; font-weight:600; color:var(--indigo);">Q 1 / 6</span>
+        </div>
+        <div class="timer-box" id="hud-timer">
+          <span>⏱️</span> <span id="timer-val">02:00</span>
+        </div>
+      </div>
 
-    const scoreClass = report.score >= 80 ? 'score-correct' : report.score >= 50 ? 'score-partial' : 'score-incorrect';
+      <!-- Question Card -->
+      <div class="glass-card question-card">
+        <div class="q-header-row">
+          <div class="q-number" id="q-header-num">Question 1</div>
+          <button class="btn-tts" onclick="readQuestionAloud()">
+            <span>🔊</span> Listen
+          </button>
+        </div>
+        <div class="q-text" id="q-text-display">
+          Tell me about yourself, your technical background, and a complex system or project you recently built.
+        </div>
+      </div>
 
-    // New contextual report format (concepts / feedback / suggested_followup)
-    let checksHtml = '';
-    const concepts = report.concepts || [];
+      <!-- Candidate Answer Console -->
+      <div class="glass-card answer-console">
+        <textarea id="answer-text" class="answer-textarea" placeholder="Speak or type your structured technical response... (Ctrl + Enter to submit)" oninput="updateWordCount(this)" onkeydown="handleAnswerKey(event)"></textarea>
+        
+        <div class="console-footer">
+          <div>
+            <span id="word-count">0</span> words &middot; est. <span id="speak-time">0m 0s</span> speaking time
+          </div>
+          <div class="console-actions">
+            <button id="mic-btn" class="mic-button" onclick="toggleVoiceInput()" title="Speech-to-Text Input">
+              🎙️
+            </button>
+            <button id="btn-submit-answer" class="btn btn-emerald" onclick="submitAnswer()">
+              Submit Response ↵
+            </button>
+          </div>
+        </div>
+      </div>
 
-    if (concepts.length > 0) {
-      for (const c of concepts) {
-        const status = c.status === 'pass' ? 'pass' : c.status === 'partial' ? 'partial' : 'fail';
-        const icon = status === 'pass' ? '&#10003;' : status === 'partial' ? '!' : '&#10007;';
-        checksHtml += `
-          <li class="check-item check-${status}">
-            <span class="check-icon">${icon}</span>
-            <div class="check-content">
-              <span class="check-label">${escapeHtml(c.name)}</span>
-              <span class="check-detail">${escapeHtml(c.detail || '')}</span>
+      <!-- Evaluation Feed for current & previous turns -->
+      <div class="eval-feed" id="eval-feed"></div>
+    </section>
+
+    <!-- ============================================================
+         3. FINAL INTERVIEW REPORT VIEW
+         ============================================================ -->
+    <section id="view-interview-report" class="glass-card">
+      <div class="report-hero">
+        <div class="verdict-box">
+          <div id="report-verdict-tag" class="verdict-tag verdict-hire">HIRE RECOMMENDATION</div>
+          <div class="overall-score-display" id="report-overall-score">84<span style="font-size:1.5rem; color:var(--text-muted);">/100</span></div>
+          <h2 id="report-candidate-header" style="font-size:1.3rem; margin-bottom:8px;">Alex Rivera</h2>
+          <p id="report-summary-text" style="color:var(--text-secondary); font-size:0.95rem; line-height:1.6;">
+            Demonstrated strong technical depth and structured problem-solving throughout the session.
+          </p>
+          <div style="display:flex; gap:12px; margin-top:20px;">
+            <button class="btn btn-secondary" onclick="exportReport('markdown')">📥 Download Markdown</button>
+            <button class="btn btn-secondary" onclick="exportReport('json')">📊 Download JSON</button>
+            <button class="btn btn-primary" onclick="restartSession()">🔄 New Interview</button>
+          </div>
+        </div>
+
+        <!-- SVG 5-Competency Radar Chart -->
+        <div class="radar-container" id="radar-chart-box">
+          <svg id="competency-radar-svg" width="280" height="280" viewBox="0 0 280 280"></svg>
+        </div>
+      </div>
+
+      <div class="report-sections-grid" style="margin-top:24px;">
+        <div class="glass-card" style="background:rgba(13, 20, 36, 0.5);">
+          <h3 style="font-size:1rem; font-weight:700; color:var(--emerald);">💪 Key Strengths</h3>
+          <ul class="recs-list" id="report-strengths-list"></ul>
+        </div>
+        <div class="glass-card" style="background:rgba(13, 20, 36, 0.5);">
+          <h3 style="font-size:1rem; font-weight:700; color:var(--amber);">🎯 Growth Opportunities</h3>
+          <ul class="recs-list" id="report-growth-list"></ul>
+        </div>
+      </div>
+
+      <!-- Turn-by-Turn Review -->
+      <div style="margin-top:24px;">
+        <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:16px;">Question-by-Question Breakdown</h3>
+        <div id="report-qa-breakdown" style="display:flex; flex-direction:column; gap:14px;"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         4. SALARY NEGOTIATION SIMULATOR VIEW
+         ============================================================ -->
+    <section id="view-negotiation">
+      <div class="glass-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:20px;">
+          <div>
+            <h2 style="font-size:1.6rem; font-weight:800;">Real-Time Salary Negotiation Simulator</h2>
+            <p style="color:var(--text-secondary); font-size:0.9rem;">
+              Practice high-stakes compensation discussions against realistic FAANG & Startup recruiter personas.
+            </p>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <label class="form-label" style="margin:0;">Scenario:</label>
+            <select id="nego-scenario-select" class="form-select" style="width:240px;" onchange="initSalaryNegotiation()">
+              <option value="google_l5">Google — Senior L5 SWE</option>
+              <option value="meta_e4">Meta — Mid-Level E4 SWE</option>
+              <option value="startup_series_b">Series B Startup — Lead Eng</option>
+              <option value="amazon_sde2">Amazon — SDE II</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Compensation KPI Cards -->
+        <div class="nego-kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Base Salary</div>
+            <div class="kpi-value" id="nego-kpi-base">$195,000</div>
+            <div class="kpi-sub" id="nego-diff-base">Initial Offer</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Annual Equity</div>
+            <div class="kpi-value" id="nego-kpi-equity">$110,000</div>
+            <div class="kpi-sub" id="nego-diff-equity">4-Yr Grant</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Sign-On Bonus</div>
+            <div class="kpi-value" id="nego-kpi-signing">$25,000</div>
+            <div class="kpi-sub" id="nego-diff-signing">Year 1 Only</div>
+          </div>
+          <div class="kpi-card" style="border-color:rgba(99, 102, 241, 0.4);">
+            <div class="kpi-label" style="color:var(--indigo);">Year 1 Total Comp</div>
+            <div class="kpi-value" id="nego-kpi-total" style="color:#a5b4fc;">$330,000</div>
+            <div class="kpi-sub" id="nego-diff-total">Market 55th %ile</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Negotiation Interactive Area -->
+      <div class="nego-workspace">
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <!-- Recruiter & Candidate Dialog Stream -->
+          <div class="chat-stream" id="nego-chat-stream"></div>
+
+          <!-- Counter-Offer Form -->
+          <div class="glass-card" style="padding:16px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+              <span class="form-label" style="margin:0;">Select Negotiation Tactic:</span>
+              <select id="nego-tactic-select" class="form-select" style="width:220px; padding:6px 10px; font-size:0.85rem;">
+                <option value="competing_offer">Leverage Competing Offer</option>
+                <option value="market_data">Market Benchmark Anchor</option>
+                <option value="value_add">Value & Impact Justification</option>
+                <option value="collaborative">Collaborative Flexibility</option>
+              </select>
             </div>
-          </li>
+            <textarea id="nego-input-text" class="form-textarea" rows="3" placeholder="Draft your counter-proposal (e.g., 'Thank you for this offer! Given my competing discussions at $375k TC and strong track record in distributed storage, I was hoping for $215k base...'"></textarea>
+            <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:10px;">
+              <button id="btn-nego-send" class="btn btn-primary" onclick="sendNegotiationCounter()">Send Counter-Offer →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Negotiation Strategy & Coach Panel -->
+        <div class="sidebar-panel">
+          <div class="glass-card">
+            <h4 style="font-size:0.9rem; font-weight:700; margin-bottom:10px;">Recruiter Demeanor</h4>
+            <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:14px;" id="nego-recruiter-stance">
+              Collaborative but constrained on base salary. Open to equity & signing adjustments.
+            </div>
+            <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:4px;">
+              Rounds Remaining: <span id="nego-rounds-badge" style="color:var(--text);">3 of 4</span>
+            </div>
+          </div>
+
+          <div class="glass-card" id="nego-scores-card">
+            <h4 style="font-size:0.9rem; font-weight:700; margin-bottom:12px;">Tactical Scoring</h4>
+            <div style="display:flex; flex-direction:column; gap:10px; font-size:0.82rem;">
+              <div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                  <span>Assertiveness</span>
+                  <span id="score-assert" style="font-weight:700;">-%</span>
+                </div>
+                <div class="star-track"><div id="bar-assert" class="star-fill" style="width:0%;"></div></div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                  <span>Professionalism</span>
+                  <span id="score-prof" style="font-weight:700;">-%</span>
+                </div>
+                <div class="star-track"><div id="bar-prof" class="star-fill" style="width:0%;"></div></div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                  <span>Data-Driven Anchor</span>
+                  <span id="score-data" style="font-weight:700;">-%</span>
+                </div>
+                <div class="star-track"><div id="bar-data" class="star-fill" style="width:0%;"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         5. ANALYTICS & PAST SESSIONS VIEW
+         ============================================================ -->
+    <section id="view-analytics" class="glass-card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+        <div>
+          <h2 style="font-size:1.6rem; font-weight:800;">Candidate Performance Trends</h2>
+          <p style="color:var(--text-secondary); font-size:0.9rem;">
+            Longitudinal telemetry tracking competency growth across simulated interview rounds.
+          </p>
+        </div>
+        <button class="btn btn-secondary" onclick="loadAnalytics()">🔄 Refresh Data</button>
+      </div>
+
+      <div class="nego-kpi-grid" style="margin-bottom:24px;">
+        <div class="kpi-card">
+          <div class="kpi-label">Completed Sessions</div>
+          <div class="kpi-value" id="stat-total-sessions">0</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Average Score</div>
+          <div class="kpi-value" id="stat-avg-score">--</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Top Competency</div>
+          <div class="kpi-value" id="stat-top-comp" style="font-size:1.2rem; color:var(--emerald);">--</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Current Bar Target</div>
+          <div class="kpi-value" style="font-size:1.2rem; color:var(--indigo);">FAANG Senior</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:12px;">Session History</h3>
+      <div style="overflow-x:auto;">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Candidate</th>
+              <th>Track</th>
+              <th>Questions</th>
+              <th>Overall Score</th>
+              <th>Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body">
+            <tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">No completed sessions tracked yet. Complete an interview to see telemetry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    /* ===============================================================
+       IntervAI Client Engine
+       =============================================================== */
+    const API_BASE = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
+      ? '' : 'http://localhost:8000';
+
+    // State
+    let currentSessionId = null;
+    let selectedCompany = "";
+    let uploadedResumeFile = null;
+    let activeQuestionTimer = null;
+    let timerSecondsRemaining = 120;
+    let currentQuestionData = null;
+    let activeTurnStartTime = 0;
+    let lastReportData = null;
+
+    // Negotiation state
+    let negoSessionId = null;
+    let initialOfferData = null;
+
+    // Speech Recognition
+    let recognition = null;
+    let isRecordingVoice = false;
+
+    // ── Lifecycle Initialization ─────────────────────────────────
+    document.addEventListener('DOMContentLoaded', () => {
+      checkSystemStatus();
+      initSpeechRecognition();
+      setupDropzone();
+    });
+
+    async function checkSystemStatus() {
+      const dot = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+      try {
+        const res = await fetch(`${API_BASE}/api/status`);
+        const data = await res.json();
+        if (data.ready) {
+          const ckptCount = data.available_checkpoints ? data.available_checkpoints.length : 0;
+          text.textContent = `Ready • ${ckptCount} Checkpoints Loaded`;
+          dot.style.background = 'var(--emerald)';
+        } else {
+          text.textContent = 'Models Offline';
+          dot.style.background = 'var(--amber)';
+        }
+      } catch (err) {
+        text.textContent = 'API Disconnected';
+        dot.style.background = 'var(--rose)';
+      }
+    }
+
+    // ── Tab Switching ────────────────────────────────────────────
+    function switchTab(tabId) {
+      const views = ['interview-setup', 'interview-live', 'interview-report', 'negotiation', 'analytics'];
+      views.forEach(v => {
+        const el = document.getElementById(`view-${v}`);
+        if (el) el.style.display = 'none';
+      });
+
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+
+      if (tabId === 'interview-setup') {
+        document.getElementById('view-interview-setup').style.display = 'block';
+        document.getElementById('nav-btn-interview').classList.add('active');
+      } else if (tabId === 'interview-live') {
+        document.getElementById('view-interview-live').style.display = 'flex';
+        document.getElementById('nav-btn-interview').classList.add('active');
+      } else if (tabId === 'interview-report') {
+        document.getElementById('view-interview-report').style.display = 'flex';
+        document.getElementById('nav-btn-interview').classList.add('active');
+      } else if (tabId === 'negotiation') {
+        document.getElementById('view-negotiation').style.display = 'flex';
+        document.getElementById('nav-btn-nego').classList.add('active');
+        if (!negoSessionId) initSalaryNegotiation();
+      } else if (tabId === 'analytics') {
+        document.getElementById('view-analytics').style.display = 'flex';
+        document.getElementById('nav-btn-analytics').classList.add('active');
+        loadAnalytics();
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // ── Setup Mode Handlers ──────────────────────────────────────
+    function selectCompany(el) {
+      document.querySelectorAll('.company-card').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedCompany = el.getAttribute('data-company') || "";
+    }
+
+    function setResumeInputMode(mode) {
+      document.getElementById('tab-upload-file').classList.toggle('active', mode === 'file');
+      document.getElementById('tab-upload-text').classList.toggle('active', mode === 'text');
+      document.getElementById('resume-file-pane').style.display = mode === 'file' ? 'block' : 'none';
+      document.getElementById('resume-text-pane').style.display = mode === 'text' ? 'block' : 'none';
+    }
+
+    function setupDropzone() {
+      const dropzone = document.getElementById('dropzone');
+      ['dragenter', 'dragover'].forEach(name => {
+        dropzone.addEventListener(name, (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+      });
+      ['dragleave', 'drop'].forEach(name => {
+        dropzone.addEventListener(name, (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); });
+      });
+      dropzone.addEventListener('drop', (e) => {
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+          handleFileSelected(e.dataTransfer.files);
+        }
+      });
+    }
+
+    function handleFileSelected(files) {
+      if (!files || !files[0]) return;
+      uploadedResumeFile = files[0];
+      const nameEl = document.getElementById('dropzone-file-name');
+      nameEl.textContent = `Attached: ${uploadedResumeFile.name} (${(uploadedResumeFile.size / 1024).toFixed(1)} KB)`;
+      nameEl.style.color = 'var(--emerald)';
+    }
+
+    function loadSampleResume(type) {
+      const textEl = document.getElementById('resume-text');
+      if (type === 'backend') {
+        textEl.value = `Alex Rivera — Senior Backend Software Engineer
+Summary: 6+ years building high-throughput distributed architectures, microservices, and database systems.
+Skills: Python, Go, PostgreSQL, Redis, Kafka, Docker, Kubernetes, AWS, System Design, REST & gRPC.
+Experience:
+- Senior Engineer at Acme FinTech: Architected low-latency settlement engine processing 12,000 TPS. Reduced p99 latency by 45% using caching and query optimization.
+- Software Engineer at ScaleCloud: Designed asynchronous event-driven workflow with Kafka and Redis. Managed Kubernetes clusters across 3 AWS regions.
+Education: B.S. in Computer Science, University of California.`;
+      } else {
+        textEl.value = `Alex Rivera — Machine Learning Engineer
+Summary: 4+ years researching and deploying deep learning pipelines, transformer architectures, and generative models.
+Skills: Python, PyTorch, HuggingFace, CUDA, ML System Design, RoPE, LoRA, Docker, AWS EC2/SageMaker.
+Experience:
+- ML Engineer at Cognition AI: Fine-tuned 7B LLM using FlashAttention and LoRA with a 3x throughput speedup. Implemented speculative decoding and KV caching.
+- Research Assistant at AI Labs: Authored benchmark paper on curriculum learning and optimizer dynamics.
+Education: M.S. in Artificial Intelligence, Carnegie Mellon.`;
+      }
+    }
+
+    // ── Start Interview ──────────────────────────────────────────
+    async function startInterview() {
+      const candidateName = document.getElementById('candidate-name').value.trim() || 'Alex Rivera';
+      showLoader('Initializing personalized interview environment...');
+
+      try {
+        let res, data;
+        if (uploadedResumeFile && document.getElementById('tab-upload-file').classList.contains('active')) {
+          const formData = new FormData();
+          formData.append('file', uploadedResumeFile);
+          formData.append('candidate_name', candidateName);
+          formData.append('company_name', selectedCompany);
+
+          res = await fetch(`${API_BASE}/api/interview/start-file`, {
+            method: 'POST',
+            body: formData,
+          });
+        } else {
+          const resumeText = document.getElementById('resume-text').value.trim() ||
+            'Software Engineer with experience in Python, algorithms, backend architectures, and distributed systems.';
+
+          res = await fetch(`${API_BASE}/api/interview/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              candidate_name: candidateName,
+              company_name: selectedCompany,
+              resume_text: resumeText,
+            }),
+          });
+        }
+
+        hideLoader();
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`Error launching interview: ${err.detail || 'Unknown error'}`);
+          return;
+        }
+
+        data = await res.json();
+        currentSessionId = data.session_id;
+
+        // Switch to Live Interview UI
+        switchTab('interview-live');
+        document.getElementById('eval-feed').innerHTML = '';
+        renderActiveQuestion(data);
+      } catch (err) {
+        hideLoader();
+        alert(`Failed to connect to IntervAI server: ${err.message}`);
+      }
+    }
+
+    // ── Live Question & Timer ────────────────────────────────────
+    function renderActiveQuestion(data) {
+      currentQuestionData = data;
+      activeTurnStartTime = Date.now();
+
+      const qText = data.question || (data.first_question ? data.first_question.question_text : '');
+      const qNum = data.question_number || 1;
+      const totalQ = data.total_questions || 6;
+      const phase = data.phase || 'warmup';
+      const company = data.company || (selectedCompany || 'General Technical');
+      const timeLimit = data.time_limit || 120;
+
+      document.getElementById('hud-counter').textContent = `Q ${qNum} / ${totalQ}`;
+      document.getElementById('q-header-num').textContent = `Question ${qNum} of ${totalQ}`;
+      document.getElementById('hud-company-pill').textContent = company;
+
+      const phaseBadge = document.getElementById('hud-phase-badge');
+      phaseBadge.textContent = phase.replace('_', ' ');
+      phaseBadge.className = `badge-pill badge-${phase}`;
+
+      document.getElementById('q-text-display').textContent = qText;
+      document.getElementById('answer-text').value = '';
+      updateWordCount(document.getElementById('answer-text'));
+
+      startQuestionTimer(timeLimit);
+    }
+
+    function startQuestionTimer(durationSec) {
+      clearInterval(activeQuestionTimer);
+      timerSecondsRemaining = durationSec;
+      updateTimerDisplay();
+
+      activeQuestionTimer = setInterval(() => {
+        timerSecondsRemaining--;
+        updateTimerDisplay();
+        if (timerSecondsRemaining <= 0) {
+          clearInterval(activeQuestionTimer);
+        }
+      }, 1000);
+    }
+
+    function updateTimerDisplay() {
+      const min = Math.floor(timerSecondsRemaining / 60);
+      const sec = timerSecondsRemaining % 60;
+      const timerVal = document.getElementById('timer-val');
+      const timerBox = document.getElementById('hud-timer');
+      timerVal.textContent = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      if (timerSecondsRemaining <= 30) {
+        timerBox.classList.add('warning');
+      } else {
+        timerBox.classList.remove('warning');
+      }
+    }
+
+    function readQuestionAloud() {
+      const text = document.getElementById('q-text-display').textContent;
+      if (!('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.05;
+      const voices = window.speechSynthesis.getVoices();
+      const natural = voices.find(v => v.name.includes('Natural') || v.name.includes('Google US English'));
+      if (natural) utterance.voice = natural;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    // ── Word Counter ─────────────────────────────────────────────
+    function updateWordCount(textarea) {
+      const words = textarea.value.trim() ? textarea.value.trim().split(/\s+/).length : 0;
+      document.getElementById('word-count').textContent = words;
+      const estSec = Math.round((words / 130) * 60);
+      const estMin = Math.floor(estSec / 60);
+      const remSec = estSec % 60;
+      document.getElementById('speak-time').textContent = `${estMin}m ${remSec}s`;
+    }
+
+    function handleAnswerKey(e) {
+      if (e.key === 'Enter' && e.ctrlKey) {
+        e.preventDefault();
+        submitAnswer();
+      }
+    }
+
+    // ── Speech-To-Text ───────────────────────────────────────────
+    function initSpeechRecognition() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return;
+      recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (e) => {
+        const last = e.results.length - 1;
+        const transcript = e.results[last][0].transcript;
+        const textarea = document.getElementById('answer-text');
+        textarea.value += (textarea.value.trim() ? ' ' : '') + transcript;
+        updateWordCount(textarea);
+      };
+
+      recognition.onerror = () => stopVoiceInput();
+      recognition.onend = () => {
+        if (isRecordingVoice) recognition.start();
+      };
+    }
+
+    function toggleVoiceInput() {
+      if (!recognition) {
+        alert('Web Speech Recognition is not supported in this browser. You can type directly in the console.');
+        return;
+      }
+      if (isRecordingVoice) {
+        stopVoiceInput();
+      } else {
+        isRecordingVoice = true;
+        document.getElementById('mic-btn').classList.add('recording');
+        recognition.start();
+      }
+    }
+
+    function stopVoiceInput() {
+      isRecordingVoice = false;
+      document.getElementById('mic-btn').classList.remove('recording');
+      if (recognition) recognition.stop();
+    }
+
+    // ── Submit Answer ────────────────────────────────────────────
+    async function submitAnswer() {
+      const text = document.getElementById('answer-text').value.trim();
+      if (!text) {
+        alert('Please enter or speak your response before submitting.');
+        return;
+      }
+      stopVoiceInput();
+      clearInterval(activeQuestionTimer);
+
+      const timeTaken = Math.max(1, (Date.now() - activeTurnStartTime) / 1000);
+      showLoader('Scoring technical response with AI evaluator & rubric...');
+
+      try {
+        const res = await fetch(`${API_BASE}/api/interview/answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: currentSessionId,
+            answer: text,
+            time_taken: timeTaken,
+          }),
+        });
+
+        hideLoader();
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`Error submitting answer: ${err.detail || 'Evaluation failed'}`);
+          return;
+        }
+
+        const data = await res.json();
+
+        // Render Feedback Card in Live Feed
+        appendTurnFeedback(currentQuestionData.question_number || 1, text, data);
+
+        if (data.is_complete) {
+          lastReportData = data.report || {};
+          setTimeout(() => {
+            renderFinalReport(lastReportData);
+            switchTab('interview-report');
+          }, 1500);
+        } else {
+          renderActiveQuestion(data);
+        }
+      } catch (err) {
+        hideLoader();
+        alert(`Network error submitting answer: ${err.message}`);
+      }
+    }
+
+    function appendTurnFeedback(qNum, answerText, data) {
+      const feed = document.getElementById('eval-feed');
+      const card = document.createElement('div');
+      card.className = 'eval-card';
+
+      const scores = data.score || {};
+      const avg = Math.round(data.report ? data.report.score : (Object.values(scores).reduce((a, b) => a + b, 0) / Math.max(1, Object.keys(scores).length)) * 100);
+      const scoreColor = avg >= 75 ? 'var(--emerald)' : avg >= 50 ? 'var(--amber)' : 'var(--rose)';
+
+      let starHtml = '';
+      if (data.star_analysis && Object.keys(data.star_analysis).length > 0) {
+        const sa = data.star_analysis;
+        starHtml = `
+          <div class="star-progress-grid">
+            <div class="star-col"><div class="star-label">Situation</div><div class="star-track"><div class="star-fill" style="width:${Math.round((sa.situation || 0)*100)}%;"></div></div></div>
+            <div class="star-col"><div class="star-label">Task</div><div class="star-track"><div class="star-fill" style="width:${Math.round((sa.task || 0)*100)}%;"></div></div></div>
+            <div class="star-col"><div class="star-label">Action</div><div class="star-track"><div class="star-fill" style="width:${Math.round((sa.action || 0)*100)}%;"></div></div></div>
+            <div class="star-col"><div class="star-label">Result</div><div class="star-track"><div class="star-fill" style="width:${Math.round((sa.result || 0)*100)}%;"></div></div></div>
+          </div>
         `;
       }
-    }
 
-    // Accuracy / completeness / quality summaries
-    const extra = [];
-    if (report.accuracy) extra.push(['Accuracy', report.accuracy.status]);
-    if (report.completeness) extra.push(['Completeness', report.completeness.status]);
-    if (report.quality) extra.push(['Depth & Clarity', report.quality.status]);
-    for (const [label, status] of extra) {
-      const s = status === 'pass' ? 'pass' : status === 'partial' ? 'partial' : 'fail';
-      const icon = s === 'pass' ? '&#10003;' : s === 'partial' ? '!' : '&#10007;';
-      checksHtml += `
-        <li class="check-item check-${s}">
-          <span class="check-icon">${icon}</span>
-          <div class="check-content">
-            <span class="check-label">${label}</span>
-            <span class="check-detail"></span>
-          </div>
-        </li>
-      `;
-    }
-
-    const feedbackText = report.feedback || report.overall_feedback || '';
-    const followupText = report.suggested_followup || report.follow_up || '';
-
-    div.innerHTML = `
-      <div class="report-header">
-        <div class="report-title">Analysis Report</div>
-        <div class="report-score ${scoreClass}">${report.score} <span>/ 100</span></div>
-      </div>
-      <ul class="check-list">${checksHtml}</ul>
-      ${feedbackText ? `<div class="followup" style="border:none; padding-top:0;">${escapeHtml(feedbackText)}</div>` : ''}
-      ${followupText ? `<div class="followup">${escapeHtml(followupText)}</div>` : ''}
-    `;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
-
-  function renderPanelReport(panel) {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'report-card';
-
-    const o = panel.overall || {};
-    const concepts = panel.concepts || [];
-    const weaknesses = panel.weaknesses || [];
-    const suggestions = panel.suggestions || [];
-
-    const levelColor = {
-      'Mastered': 'var(--green)',
-      'Developing': 'var(--amber)',
-      'Beginner': 'var(--red)',
-      'Not Started': 'var(--text-muted)',
-    };
-
-    let conceptsHtml = concepts.map(c => `
-      <li class="check-item">
-        <span class="check-icon" style="background:transparent; color:${levelColor[c.level] || 'var(--text-muted)'}; font-size:10px;">${c.level === 'Mastered' ? '&#10003;' : c.level === 'Developing' ? '!' : c.level === 'Beginner' ? '&#10007;' : '-'}</span>
-        <div class="check-content">
-          <span class="check-label">${escapeHtml(c.concept)}</span>
-          <span class="check-detail">${escapeHtml(c.detail)}</span>
-        </div>
-      </li>
-    `).join('');
-
-    let weakHtml = '';
-    if (weaknesses.length) {
-      weakHtml = weaknesses.map(w => `
-        <div class="ref-section">
-          <div class="ref-title">&#9888; Gap &mdash; ${escapeHtml(w.question)}</div>
-          <div class="ref-text" style="white-space:pre-wrap;">
-            <strong>Your answer:</strong> ${escapeHtml(w.candidate_answer)}
-            ${w.missing_concepts && w.missing_concepts.length ? `\n<strong>Missing:</strong> ${escapeHtml(w.missing_concepts.join(', '))}` : ''}
-            ${w.model_answer ? `\n<strong>Model answer:</strong> ${escapeHtml(w.model_answer)}` : ''}
-          </div>
+      const chipsHtml = Object.entries(scores).map(([k, v]) => `
+        <div class="dim-chip">
+          <span>${k.replace('_', ' ')}</span>
+          <span class="dim-val">${Math.round(v * 100)}%</span>
         </div>
       `).join('');
+
+      card.innerHTML = `
+        <div class="eval-header">
+          <div>
+            <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Turn Assessment</div>
+            <div style="font-size:0.95rem; font-weight:600; color:#fff;">Question ${qNum} Feedback</div>
+          </div>
+          <div class="score-badge-circle" style="color:${scoreColor};">
+            ${avg} <span>/ 100</span>
+          </div>
+        </div>
+        ${starHtml}
+        <div style="font-size:0.88rem; color:var(--text-secondary); line-height:1.6; margin-bottom:10px;">
+          ${data.feedback || 'Answer recorded.'}
+        </div>
+        <div class="dimensions-list">${chipsHtml}</div>
+      `;
+
+      feed.prepend(card);
     }
 
-    let sugHtml = suggestions.map(s => `<li class="check-item"><span class="check-icon">&#9654;</span><div class="check-content"><span class="check-detail">${escapeHtml(s)}</span></div></li>`).join('');
+    // ── Final Report & SVG Radar ─────────────────────────────────
+    function renderFinalReport(report) {
+      const overall = report.overall_score !== undefined ? report.overall_score : 80;
+      document.getElementById('report-overall-score').innerHTML = `${overall}<span style="font-size:1.5rem; color:var(--text-muted);">/100</span>`;
+      document.getElementById('report-candidate-header').textContent = report.candidate || 'Alex Rivera';
 
-    div.innerHTML = `
-      <div class="report-header">
-        <div class="report-title">Panel Report &mdash; Interview Complete</div>
-        <div class="report-score score-partial">${o.overall_score !== undefined ? Math.round(o.overall_score) : '-'} <span>/ 100</span></div>
-      </div>
-      <p style="font-weight:600; margin-bottom:16px;">${escapeHtml(o.verdict || '')}</p>
-      <div class="report-title" style="margin-bottom:12px;">Concept Mastery</div>
-      <ul class="check-list">${conceptsHtml}</ul>
-      ${weakHtml}
-      ${sugHtml ? `<div class="report-title" style="margin-top:16px; margin-bottom:12px;">How to Improve</div><ul class="check-list">${sugHtml}</ul>` : ''}
-    `;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
+      const rec = report.recommendation || 'HIRE';
+      const tag = document.getElementById('report-verdict-tag');
+      tag.textContent = rec.replace('_', ' ').toUpperCase();
+      tag.className = `verdict-tag verdict-${rec.toLowerCase()}`;
 
-  function renderSessionSummary(summary) {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.style.cssText = 'background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:24px; text-align:center; margin-top:20px;';
-    div.innerHTML = `
-      <h3 style="font-size:1.2rem; margin-bottom:8px;">Interview Complete</h3>
-      <p style="color:var(--text-muted);">Questions Answered: ${summary.total_questions}</p>
-      <div style="font-size:2rem; font-weight:700; margin:16px 0;">${summary.average_score} / 100</div>
-      <p style="font-weight:500;">${summary.verdict}</p>
-    `;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
+      // Strengths & Improvements
+      const strList = document.getElementById('report-strengths-list');
+      strList.innerHTML = (report.strengths && report.strengths.length ? report.strengths : [
+        'Precise technical articulation and vocabulary.',
+        'Good command of modular system architecture.'
+      ]).map(s => `<li class="recs-item"><span class="recs-icon">✔</span><span>${s}</span></li>`).join('');
 
-  function renderTyping() {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'msg-card';
-    div.innerHTML = `
-      <div class="msg-header">
-        <div class="msg-icon ai-icon">AI</div>
-        <span>Interviewer</span>
-      </div>
-      <div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-    `;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-    return div;
-  }
+      const groList = document.getElementById('report-growth-list');
+      groList.innerHTML = (report.areas_for_improvement && report.areas_for_improvement.length ? report.areas_for_improvement : [
+        'Proactively state quantitative trade-offs before choosing an algorithm.',
+        'Back behavioral stories with explicit business metrics and outcomes.'
+      ]).map(g => `<li class="recs-item"><span class="recs-icon" style="color:var(--amber);">⚡</span><span>${g}</span></li>`).join('');
 
-  function renderError(msg) {
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.style.cssText = 'color:var(--red); padding:12px; font-size:0.9rem; background:var(--red-bg); border-radius:6px;';
-    div.textContent = msg;
-    msgs.appendChild(div);
-  }
+      // Draw SVG Radar Chart
+      const competencies = report.competencies || {
+        "Technical Depth": 0.82,
+        "System Design": 0.78,
+        "Problem Solving": 0.85,
+        "STAR Behavioral": 0.74,
+        "Communication": 0.88
+      };
+      drawRadarChart('competency-radar-svg', competencies);
 
-  function showSessionOver() {
-    document.getElementById('input-area').innerHTML = `
-      <div style="display:flex; align-items:center; justify-content:center; padding:16px;">
-        <button class="btn btn-ghost" onclick="location.reload()">Start New Session</button>
-      </div>
-    `;
-  }
+      // Question breakdown
+      const breakdownEl = document.getElementById('report-qa-breakdown');
+      if (report.detailed_answers && report.detailed_answers.length > 0) {
+        breakdownEl.innerHTML = report.detailed_answers.map((a, i) => `
+          <div class="glass-card" style="padding:16px; background:rgba(0,0,0,0.25);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+              <span style="font-weight:700; font-size:0.9rem; color:var(--indigo);">Q${i+1}: ${a.question}</span>
+              <span style="font-size:0.8rem; color:var(--text-muted);">${a.phase} &middot; ${a.time_sec}s</span>
+            </div>
+            <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:8px;">${a.feedback}</div>
+          </div>
+        `).join('');
+      } else {
+        breakdownEl.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem;">Detailed question review saved.</div>';
+      }
+    }
 
-  function escapeHtml(t) {
-    if (!t) return '';
-    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
+    function drawRadarChart(svgId, compMap) {
+      const svg = document.getElementById(svgId);
+      svg.innerHTML = '';
+      const size = 280;
+      const center = size / 2;
+      const radius = 95;
 
-  // ── Voice ─────────────────────────────────────────────────
-  let recognition = null;
-  let isRecording = false;
+      const keys = Object.keys(compMap);
+      const total = keys.length;
+      if (total < 3) return;
 
-  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SR();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-    recognition.onstart = () => { isRecording = true; document.getElementById('mic-btn').classList.add('listening'); document.getElementById('answer-input').placeholder = 'Listening...'; };
-    recognition.onresult = (e) => { const t = e.results[0][0].transcript; const inp = document.getElementById('answer-input'); inp.value += (inp.value ? ' ' : '') + t; autoResize(inp); };
-    recognition.onerror = () => stopRecording();
-    recognition.onend = () => stopRecording();
-  }
+      const angleStep = (Math.PI * 2) / total;
 
-  function toggleRecording() {
-    if (!recognition) { alert('Speech Recognition not supported.'); return; }
-    isRecording ? recognition.stop() : recognition.start();
-  }
-  function stopRecording() {
-    isRecording = false;
-    document.getElementById('mic-btn').classList.remove('listening');
-    document.getElementById('answer-input').placeholder = 'Message Interviewer...';
-  }
+      // Draw background grid polygons (levels 0.25, 0.5, 0.75, 1.0)
+      [0.25, 0.5, 0.75, 1.0].forEach(level => {
+        const pts = [];
+        for (let i = 0; i < total; i++) {
+          const angle = i * angleStep - Math.PI / 2;
+          const r = radius * level;
+          pts.push(`${center + r * Math.cos(angle)},${center + r * Math.sin(angle)}`);
+        }
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        poly.setAttribute('points', pts.join(' '));
+        poly.setAttribute('fill', 'none');
+        poly.setAttribute('stroke', 'rgba(255, 255, 255, 0.08)');
+        poly.setAttribute('stroke-width', '1');
+        svg.appendChild(poly);
+      });
 
-  function speakText(text) {
-    if (!('speechSynthesis' in window)) return;
-    const clean = text.replace(/[*#`]/g, '').replace(/<[^>]*>/g, '').replace(/```[\s\S]*?```/g, 'code snippet.');
-    const u = new SpeechSynthesisUtterance(clean);
-    u.rate = 1.0;
-    const voices = window.speechSynthesis.getVoices();
-    const v = voices.find(v => v.name.includes('Google') || v.name.includes('Natural')) || voices[0];
-    if (v) u.voice = v;
-    window.speechSynthesis.speak(u);
-  }
+      // Draw axis lines and labels
+      for (let i = 0; i < total; i++) {
+        const angle = i * angleStep - Math.PI / 2;
+        const x = center + radius * Math.cos(angle);
+        const y = center + radius * Math.sin(angle);
 
-  // ── UX ────────────────────────────────────────────────────
-  function handleKey(e) { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); sendAnswer(); } }
-  function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }
-</script>
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', center);
+        line.setAttribute('y1', center);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', y);
+        line.setAttribute('stroke', 'rgba(255, 255, 255, 0.08)');
+        svg.appendChild(line);
+
+        // Label
+        const lx = center + (radius + 24) * Math.cos(angle);
+        const ly = center + (radius + 24) * Math.sin(angle) + 4;
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', lx);
+        text.setAttribute('y', ly);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#94a3b8');
+        text.setAttribute('font-size', '10');
+        text.setAttribute('font-family', 'var(--font-sans)');
+        text.textContent = keys[i];
+        svg.appendChild(text);
+      }
+
+      // Draw data polygon
+      const dataPts = [];
+      keys.forEach((k, i) => {
+        const val = Math.max(0.1, Math.min(1.0, compMap[k] || 0.5));
+        const angle = i * angleStep - Math.PI / 2;
+        const r = radius * val;
+        dataPts.push(`${center + r * Math.cos(angle)},${center + r * Math.sin(angle)}`);
+      });
+
+      const dataPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      dataPoly.setAttribute('points', dataPts.join(' '));
+      dataPoly.setAttribute('fill', 'rgba(99, 102, 241, 0.35)');
+      dataPoly.setAttribute('stroke', '#6366f1');
+      dataPoly.setAttribute('stroke-width', '2.5');
+      svg.appendChild(dataPoly);
+
+      // Data point dots
+      keys.forEach((k, i) => {
+        const val = Math.max(0.1, Math.min(1.0, compMap[k] || 0.5));
+        const angle = i * angleStep - Math.PI / 2;
+        const r = radius * val;
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', center + r * Math.cos(angle));
+        circle.setAttribute('cy', center + r * Math.sin(angle));
+        circle.setAttribute('r', '4');
+        circle.setAttribute('fill', '#10b981');
+        circle.setAttribute('stroke', '#0d1424');
+        circle.setAttribute('stroke-width', '1.5');
+        svg.appendChild(circle);
+      });
+    }
+
+    async function exportReport(format) {
+      if (!currentSessionId) return;
+      window.open(`${API_BASE}/api/interview/report/${currentSessionId}/export?format=${format}`, '_blank');
+    }
+
+    function restartSession() {
+      currentSessionId = null;
+      switchTab('interview-setup');
+    }
+
+    // ── Salary Negotiation Simulator ─────────────────────────────
+    async function initSalaryNegotiation() {
+      const scenario = document.getElementById('nego-scenario-select').value;
+      const chat = document.getElementById('nego-chat-stream');
+      chat.innerHTML = '';
+      showLoader('Initializing compensation market parameters...');
+
+      try {
+        const res = await fetch(`${API_BASE}/api/negotiation/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenario_id: scenario }),
+        });
+
+        hideLoader();
+        if (!res.ok) {
+          alert('Failed to start salary negotiation session.');
+          return;
+        }
+
+        const data = await res.json();
+        negoSessionId = data.session_id;
+        initialOfferData = data.initial_offer;
+
+        // Populate KPIs
+        updateNegotiationKPIs(data.initial_offer, data.market_data);
+
+        // Render opening message from recruiter
+        appendNegoMessage('recruiter', data.opening_message);
+        document.getElementById('nego-rounds-badge').textContent = `${data.round} of 4`;
+      } catch (err) {
+        hideLoader();
+        alert(`Error starting negotiation: ${err.message}`);
+      }
+    }
+
+    function updateNegotiationKPIs(offer, market) {
+      document.getElementById('nego-kpi-base').textContent = `$${Math.round(offer.base_salary).toLocaleString()}`;
+      document.getElementById('nego-kpi-equity').textContent = `$${Math.round(offer.equity_annual).toLocaleString()}`;
+      document.getElementById('nego-kpi-signing').textContent = `$${Math.round(offer.signing_bonus).toLocaleString()}`;
+      document.getElementById('nego-kpi-total').textContent = `$${Math.round(offer.total_first_year).toLocaleString()}`;
+
+      if (market) {
+        const diff = offer.total_first_year - market.total_first_year;
+        const diffEl = document.getElementById('nego-diff-total');
+        if (diff >= 0) {
+          diffEl.textContent = `+$${Math.abs(Math.round(diff)).toLocaleString()} vs Market Median`;
+          diffEl.style.color = 'var(--emerald)';
+        } else {
+          diffEl.textContent = `-$${Math.abs(Math.round(diff)).toLocaleString()} below Market Median`;
+          diffEl.style.color = 'var(--amber)';
+        }
+      }
+    }
+
+    async function sendNegotiationCounter() {
+      const text = document.getElementById('nego-input-text').value.trim();
+      const tactic = document.getElementById('nego-tactic-select').value;
+      if (!text) return;
+
+      appendNegoMessage('candidate', text, tactic);
+      document.getElementById('nego-input-text').value = '';
+      showLoader('Evaluating tactical negotiation response...');
+
+      try {
+        const res = await fetch(`${API_BASE}/api/negotiation/respond`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: negoSessionId,
+            response: text,
+            tactic: tactic,
+          }),
+        });
+
+        hideLoader();
+        if (!res.ok) {
+          alert('Error communicating counter-offer.');
+          return;
+        }
+
+        const data = await res.json();
+
+        // Update scores
+        const sc = data.scores || {};
+        document.getElementById('score-assert').textContent = `${Math.round(sc.assertiveness || 0)}%`;
+        document.getElementById('bar-assert').style.width = `${sc.assertiveness || 0}%`;
+
+        document.getElementById('score-prof').textContent = `${Math.round(sc.professionalism || 0)}%`;
+        document.getElementById('bar-prof').style.width = `${sc.professionalism || 0}%`;
+
+        document.getElementById('score-data').textContent = `${Math.round(sc.data_driven || 0)}%`;
+        document.getElementById('bar-data').style.width = `${sc.data_driven || 0}%`;
+
+        // Update offer if recruiter revised
+        if (data.new_offer && Object.keys(data.new_offer).length > 0) {
+          updateNegotiationKPIs(data.new_offer, null);
+        }
+
+        document.getElementById('nego-rounds-badge').textContent = `${data.round} of 4`;
+
+        // Render Recruiter Response
+        setTimeout(() => {
+          appendNegoMessage('recruiter', data.employer_message);
+          if (data.is_complete) {
+            appendNegoMessage('recruiter', '🏁 Negotiation Concluded. You secured an upgraded compensation package!');
+          }
+        }, 300);
+      } catch (err) {
+        hideLoader();
+        alert(`Negotiation error: ${err.message}`);
+      }
+    }
+
+    function appendNegoMessage(sender, message, tactic) {
+      const stream = document.getElementById('nego-chat-stream');
+      const div = document.createElement('div');
+      div.className = `chat-bubble ${sender}`;
+
+      const tacticBadge = tactic ? `<span class="tactic-tag">${tactic.replace('_', ' ')}</span><br>` : '';
+      div.innerHTML = `
+        <div class="bubble-meta">${sender === 'recruiter' ? '💼 Hiring Manager / Talent Lead' : '👤 Candidate Counter-Offer'}</div>
+        ${tacticBadge}
+        ${message}
+      `;
+      stream.appendChild(div);
+      stream.scrollTop = stream.scrollHeight;
+    }
+
+    // ── Analytics & History ──────────────────────────────────────
+    async function loadAnalytics() {
+      try {
+        const res = await fetch(`${API_BASE}/api/analytics/history`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById('stat-total-sessions').textContent = data.total_sessions || 0;
+        const hist = data.history || [];
+
+        if (hist.length > 0) {
+          const avgScore = Math.round(hist.reduce((acc, h) => acc + (h.overall_score || 0), 0) / hist.length);
+          document.getElementById('stat-avg-score').textContent = `${avgScore} / 100`;
+
+          const body = document.getElementById('history-table-body');
+          body.innerHTML = hist.map(h => `
+            <tr>
+              <td>${h.timestamp ? new Date(h.timestamp * 1000).toLocaleDateString() : 'Recent'}</td>
+              <td><strong style="color:#fff;">${h.candidate_name || 'Alex'}</strong></td>
+              <td>${h.track || 'General'}</td>
+              <td>${h.total_questions || 6}</td>
+              <td><span style="color:var(--emerald); font-weight:700;">${h.overall_score || 80}/100</span></td>
+              <td><span class="badge-pill badge-technical">${h.recommendation || 'Hire'}</span></td>
+            </tr>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Analytics load error:', err);
+      }
+    }
+
+    // ── UI Helpers ───────────────────────────────────────────────
+    function showLoader(msg) {
+      document.getElementById('loader-text').textContent = msg;
+      document.getElementById('loader').style.display = 'flex';
+    }
+    function hideLoader() {
+      document.getElementById('loader').style.display = 'none';
+    }
+  </script>
 </body>
 </html>

@@ -110,12 +110,6 @@ EFFECTIVE_BATCH_SIZE = BASE_BATCH_SIZE * NUM_GPUS * GRAD_ACCUM_STEPS
 #   4-8GB VRAM (GTX 1650)  → Small model (14M)
 #   >=8GB VRAM (RTX 3060)  → Medium model (47M)
 #   >=12GB VRAM (T4/P100)  → Large model (126M)
-if VRAM_GB >= 12:
-    MODEL_SIZE = "large"
-elif VRAM_GB >= 8:
-    MODEL_SIZE = "medium"
-else:
-    MODEL_SIZE = "small"
 MODEL_SIZE = "large" if VRAM_GB >= 12 else ("medium" if VRAM_GB >= 8 else "small")
 
 # Allow override via env var (e.g. INTERVUE_MODEL=small for fast smoke tests)

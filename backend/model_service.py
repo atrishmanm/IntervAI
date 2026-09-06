@@ -20,7 +20,7 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.generator.model import create_large_model, InterviewGenerator
+from models.generator.model import GeneratorConfig, create_large_model, InterviewGenerator
 from models.generator.train_utils import load_tokenizer
 
 
@@ -79,7 +79,11 @@ class ModelService:
 
         # Build model from saved config
         cfg = ckpt.get("config", {})
-        model = create_large_model(vocab_size=cfg.get("vocab_size", self.vocab_size))
+        if cfg and "embed_dim" in cfg:
+            config = GeneratorConfig(**cfg)
+            model = InterviewGenerator(config)
+        else:
+            model = create_large_model(vocab_size=cfg.get("vocab_size", self.vocab_size))
         model.load_state_dict(sd)
         model.to(self.device)
         model.eval()
@@ -88,8 +92,17 @@ class ModelService:
               f"(epoch={ckpt.get('epoch','?')}, loss={ckpt.get('loss','?'):.4f})")
         return model
 
+    STAGE_FILES = {
+        "pretrain": "pretrained.pt",
+        "domain": "domain_tuned.pt",
+        "instruction": "instruction_tuned.pt",
+        "interview": "interview_tuned.pt",
+        "evaluator": "evaluator.pt",
+        "followup": "final_model.pt",
+    }
+
     def load_all(self):
-        """Load all 6 models. Call once at startup."""
+        """Load all models. Safe to call once at startup."""
         if self._loaded:
             return
 
@@ -97,30 +110,32 @@ class ModelService:
         print("  Loading INTERVUE models...")
         print("=" * 50)
 
-        stages = {
-            "pretrain": "pretrained.pt",
-            "domain": "domain_tuned.pt",
-            "instruction": "instruction_tuned.pt",
-            "interview": "interview_tuned.pt",
-            "evaluator": "evaluator.pt",
-            "followup": "final_model.pt",
-        }
-
-        for name, filename in stages.items():
+        for name, filename in self.STAGE_FILES.items():
             try:
                 self._models[name] = self._load_model(name, filename)
-            except FileNotFoundError as e:
+            except Exception as e:
                 print(f"  WARN: {e}")
 
         self._loaded = True
-        print(f"  Loaded {len(self._models)}/{len(stages)} models on {self.device}")
+        print(f"  Loaded {len(self._models)}/{len(self.STAGE_FILES)} models on {self.device}")
         print("=" * 50)
 
     def get_model(self, stage: str) -> Optional[InterviewGenerator]:
-        """Get a loaded model by stage name."""
-        if not self._loaded:
-            self.load_all()
-        return self._models.get(stage)
+        """Get or lazily load a specific model by stage name."""
+        if stage in self._models:
+            return self._models[stage]
+
+        filename = self.STAGE_FILES.get(stage)
+        if not filename:
+            return None
+
+        try:
+            model = self._load_model(stage, filename)
+            self._models[stage] = model
+            return model
+        except Exception as e:
+            print(f"  [ModelService] Lazy load skipped for stage '{stage}': {e}")
+            return None
 
     def _format_prompt(self, system: str = None, user: str = None,
                        assistant_prefix: str = None) -> str:
@@ -182,7 +197,7 @@ class ModelService:
 
     @torch.no_grad()
     def generate(self, stage: str, prompt: str,
-                 max_new_tokens: int = 256,
+                 max_new_tokens: int = 50,
                  temperature: float = 0.7,
                  top_p: float = 0.9,
                  top_k: int = 50) -> str:
@@ -192,12 +207,17 @@ class ModelService:
             raise RuntimeError(f"Model '{stage}' not loaded")
 
         input_ids = self._tokenize(prompt)
+        eos_id = self.tokenizer.token_to_id("<|end|>")
+        if eos_id is None:
+            eos_id = self.tokenizer.token_to_id("[SEP]")
+
         output_ids = model.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            eos_token_id=eos_id,
         )
         return self._decode(output_ids)
 
@@ -215,12 +235,17 @@ class ModelService:
                  "Provide your score and brief feedback.",
         )
         input_ids = self._tokenize(full_text)
+        eos_id = self.tokenizer.token_to_id("<|end|>")
+        if eos_id is None:
+            eos_id = self.tokenizer.token_to_id("[SEP]")
+
         output_ids = model.generate(
             input_ids,
-            max_new_tokens=150,
+            max_new_tokens=35,
             temperature=0.3,  # Lower temperature for more deterministic scoring
             top_p=0.8,
             top_k=30,
+            eos_token_id=eos_id,
         )
         response = self._decode(output_ids)
 

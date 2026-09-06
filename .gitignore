@@ -22,12 +22,13 @@ Desktop.ini
 .DS_Store
 
 # ── INTERVUE ──────────────────────────────────────────────
-# Raw data is NOT pushed to GitHub (too large, ~3.5GB).
+# Raw data is NOT pushed to GitHub (too large, ~4.6GB).
 # Keep it local; upload to Kaggle as a Dataset for training.
 data/raw/
 data/processed/
 data/splits/
 data/tokenized/
+data/sessions/
 
 # Trained artifacts / checkpoints (regenerate via training)
 models/*/saved/

@@ -38,10 +38,10 @@ class GeneratorConfig:
     n_layers: int = 16
     ff_dim: int = 2048
     max_len: int = 2048
-    dropout: float = 0.1
+    dropout: float = 0.05
     pad_id: int = 0
     tie_weights: bool = True
-    label_smoothing: float = 0.05
+    label_smoothing: float = 0.03
     gradient_checkpointing: bool = False
 
     @property
@@ -377,8 +377,12 @@ class InterviewGenerator(nn.Module):
                 mask = torch.zeros_like(logits).scatter(1, sorted_indices, sorted_mask.float())
                 logits = logits.masked_fill(mask.bool(), float("-inf"))
 
-            probs = F.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            # temperature=0 means greedy (argmax), otherwise multinomial sampling
+            if temperature <= 0.0:
+                next_token = logits.argmax(dim=-1, keepdim=True)
+            else:
+                probs = F.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
             next_token[finished] = self.pad_id
 
             generated = torch.cat([generated, next_token], dim=1)
