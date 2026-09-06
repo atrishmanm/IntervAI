@@ -36,6 +36,49 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ═══════════════════════════════════════════════════════════════
+# Kaggle Bootstrap: clone repo + copy dataset if needed
+# ═══════════════════════════════════════════════════════════════
+
+IS_KAGGLE = (os.name != "nt") and Path("/kaggle/working").exists()
+
+if IS_KAGGLE:
+    import shutil
+    import subprocess
+
+    KAGGLE_WORK = Path("/kaggle/working")
+    KAGGLE_REPO = KAGGLE_WORK / "IntervAI"
+
+    # Clone repo if not present
+    if not KAGGLE_REPO.exists():
+        print("[BOOTSTRAP] Cloning IntervAI repo...")
+        subprocess.run([
+            "git", "clone", "https://github.com/atrishmanm/IntervAI.git",
+            str(KAGGLE_REPO)
+        ], check=True)
+
+    # Change to repo directory
+    os.chdir(KAGGLE_REPO)
+
+    # Copy dataset from /kaggle/input into data/raw/
+    INPUT_DIR = Path("/kaggle/input")
+    RAW_DIR = KAGGLE_REPO / "data" / "raw"
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+    if INPUT_DIR.exists():
+        for dataset_dir in INPUT_DIR.iterdir():
+            if not dataset_dir.is_dir():
+                continue
+            for f in dataset_dir.rglob("*"):
+                if not f.is_file():
+                    continue
+                dest = RAW_DIR / f.name
+                if not dest.exists():
+                    shutil.copy2(f, dest)
+                    print(f"  [dataset] Copied {f.name}")
+
+    print(f"[BOOTSTRAP] Ready. Repo at {KAGGLE_REPO}")
+
+# ═══════════════════════════════════════════════════════════════
 # SECTION 0: Configuration & Environment Setup
 # ═══════════════════════════════════════════════════════════════
 
