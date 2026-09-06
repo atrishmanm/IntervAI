@@ -124,10 +124,31 @@ def copy_dataset_into_raw(raw_dir: Path):
     src = dataset_dirs[0]
     print(f"  Found dataset: {src}")
 
-    # Flatten every file into data/raw/
+    # Only copy files we actually need for training
+    REQUIRED_FILES = {
+        "starcoder_large.jsonl",
+        "codesearchnet.jsonl",
+        "codefeedback.jsonl",
+        "opencodeinstruct.jsonl",
+        "oasst_coding.jsonl",
+        "codealpaca.jsonl",
+        "conversations.jsonl",
+        "interview_sft_100k.jsonl",
+        "mohler_asag.jsonl",
+        "resumes_54k.jsonl",
+        "negotiation_sft_100k.jsonl",
+        "kodcode_verified.jsonl",
+        "cruxeval.jsonl",
+    }
+
     copied = 0
+    skipped = 0
     for item in sorted(src.rglob("*")):
         if not item.is_file():
+            continue
+        # Check if this file is needed
+        if item.name not in REQUIRED_FILES:
+            skipped += 1
             continue
         parts = item.relative_to(src).parts
         if len(parts) >= 2 and parts[0].lower() == "cruxeval":
@@ -139,7 +160,9 @@ def copy_dataset_into_raw(raw_dir: Path):
             shutil.copy2(item, dest)
             copied += 1
             print(f"    + {item.name}")
-    print(f"  Copied {copied} files into {raw_dir}")
+        else:
+            print(f"    = {item.name} (exists)")
+    print(f"  Copied {copied} files, skipped {skipped} unnecessary files")
 
 
 def main():
