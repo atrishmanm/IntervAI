@@ -599,8 +599,10 @@ class ResearchTrainingWrapper:
     
     def train_step(self, batch):
         """Single training step with research techniques."""
-        input_ids = batch["input_ids"].to(self.model.device)
-        labels = batch["labels"].to(self.model.device)
+        # Get device from model parameters
+        device = next(self.model.parameters()).device
+        input_ids = batch["input_ids"].to(device)
+        labels = batch["labels"].to(device)
         
         if self.use_sam:
             # SAM: first forward-backward pass

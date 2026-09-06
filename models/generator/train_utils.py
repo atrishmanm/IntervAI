@@ -315,7 +315,7 @@ def collate_packed(batch, pad_token_id=0):
         seq = b["input_ids"]
         pad_len = max_len - len(seq)
         input_ids.append(seq + [pad_token_id] * pad_len)
-        labels.append(b["labels"] + [-100] * pad_len)
+        labels.append(b["labels"] + [pad_token_id] * pad_len)
 
     return {
         "input_ids": torch.tensor(input_ids, dtype=torch.long),
@@ -1185,9 +1185,14 @@ def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
     def _try(bs):
         idx = torch.randint(len(dataset), (min(bs, len(dataset)),)).tolist()
         rows = [dataset[i] for i in idx]
+        # Pad sequences to equal length for stacking
+        max_len = max(len(r["input_ids"]) for r in rows)
+        pad_id = 0
+        input_ids = [r["input_ids"] + [pad_id] * (max_len - len(r["input_ids"])) for r in rows]
+        labels = [r["labels"] + [pad_id] * (max_len - len(r["labels"])) for r in rows]
         batch = {
-            "input_ids": torch.stack([r["input_ids"] for r in rows]).to(device),
-            "labels": torch.stack([r["labels"] for r in rows]).to(device),
+            "input_ids": torch.tensor(input_ids, dtype=torch.long).to(device),
+            "labels": torch.tensor(labels, dtype=torch.long).to(device),
         }
         try:
             opt = torch.optim.SGD(model.parameters(), lr=1e-6)

@@ -232,6 +232,7 @@ def main():
     progress_file = ckpt_dir / "training_progress.json"
 
     def save_progress(stage, status, elapsed_min):
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
         progress = {}
         if progress_file.exists():
             with open(progress_file) as f:
