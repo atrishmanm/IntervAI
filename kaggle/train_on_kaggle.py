@@ -82,6 +82,7 @@ def parse_args():
         "stage": "all",
         "resume": False,
         "time_budget": 480,
+        "limit": None,
     }
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg == "--stage" and i < len(sys.argv) - 1:
@@ -90,6 +91,8 @@ def parse_args():
             args["resume"] = True
         elif arg == "--time-budget" and i < len(sys.argv) - 1:
             args["time_budget"] = int(sys.argv[i + 1])
+        elif arg == "--limit" and i < len(sys.argv) - 1:
+            args["limit"] = int(sys.argv[i + 1])
     return args
 
 
@@ -292,7 +295,9 @@ def main():
 
         t0 = time.time()
         try:
-            rc = os.system(f"{sys.executable} models/generator/train.py --stage {s} --time-budget {expected_stage_budget}")
+            # --limit forwards a smoke-test cap (examples per file) into train.py
+            limit_arg = f" --limit {args['limit']}" if args.get("limit") else ""
+            rc = os.system(f"{sys.executable} models/generator/train.py --stage {s} --time-budget {expected_stage_budget}{limit_arg}")
             elapsed = (time.time() - t0) / 60
 
             if rc != 0:

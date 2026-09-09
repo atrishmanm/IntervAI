@@ -46,3 +46,6 @@ data_pipeline/download_more_data(1).py
 data_pipeline/download_more_data(2).py
 data_pipeline/download_more_data_1_.py
 data_pipeline/download_more_data_2_.py
+# Run artifacts
+results/
+smoke_run/
