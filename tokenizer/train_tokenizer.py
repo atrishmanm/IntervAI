@@ -258,6 +258,10 @@ def train(corpus_path: Path) -> Tokenizer:
         vocab_size=VOCAB_SIZE,
         min_frequency=MIN_FREQ,
         special_tokens=SPECIAL_TOKS,
+        # BpeTrainer reads files line-by-line, so '\n' never appears in the corpus
+        # and Ċ would be missing from the vocab — every newline would encode as
+        # [UNK]. Seed the full ByteLevel alphabet (all 256 bytes) to prevent this.
+        initial_alphabet=ByteLevel.alphabet(),
         show_progress=True,
     )
 

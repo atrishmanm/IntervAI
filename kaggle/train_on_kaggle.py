@@ -183,12 +183,20 @@ def main():
     global TIME_BUDGET_MINUTES, START_TIME
     START_TIME = time.time()
 
-    # ── 0. Clone the repo if not already present on Kaggle ─────────
+    # ── 0. Clone the repo (or refresh a stale clone from a prior session) ──
     work = Path("/kaggle/working")
     repo = work / "IntervAI"
     if work.exists() and not repo.exists():
         print("Cloning IntervAI repo...")
         os.system("git clone https://github.com/atrishmanm/IntervAI.git /kaggle/working/IntervAI")
+    elif repo.exists():
+        # /kaggle/working persists across runs of the same kernel, so an existing
+        # clone may predate recent fixes. Sync to origin/main; untracked outputs
+        # (models/, tokenizer/, data/, results/) are preserved by reset --hard.
+        print("Refreshing existing repo clone to origin/main...")
+        rc = os.system(f"git -C {repo} fetch origin && git -C {repo} reset --hard origin/main")
+        if rc != 0:
+            print("  WARN: could not refresh repo (offline or not a git clone) — using existing code.")
 
     if repo.exists():
         sys.path.insert(0, str(repo))

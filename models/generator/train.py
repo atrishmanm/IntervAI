@@ -251,7 +251,8 @@ def build_dataset_for_stage(stage, tokenizer, config):
     full = _Wrapper(uniq, tokenizer, max_len)
     val_size = min(500, max(1, len(full) // 30))
     train_size = len(full) - val_size
-    train_ds, val_ds = random_split(full, [train_size, val_size])
+    train_ds, val_ds = random_split(full, [train_size, val_size],
+                                    generator=torch.Generator().manual_seed(42))
 
     # Apply sequence packing for 2-3x throughput
     if use_packing:
@@ -501,10 +502,12 @@ def run_stage(stage, config, time_budget=None):
         cur_epoch[0] = epoch
         print(f"\n--- Epoch {epoch+1}/{config['epochs']} ---")
 
-        # Update dynamic dropout
+        # Update dynamic dropout (guarded: a wrapper mismatch must not kill the stage)
+        core = unwrap_model(model)
         epoch_total_steps = len(train_loader) // config["grad_accum_steps"]
         current_step = global_step - (epoch * epoch_total_steps)
-        unwrap_model(model).update_dropout(current_step, epoch_total_steps)
+        if hasattr(core, "update_dropout"):
+            core.update_dropout(current_step, epoch_total_steps)
 
         train_loss, steps, global_step = train_epoch(
             model, train_loader, opt, sched, DEVICE,
@@ -651,7 +654,15 @@ def main():
             import traceback; traceback.print_exc()
             if args.stage != "all":
                 raise
-            print("  Continuing to next stage...")
+            # Each stage initializes from the previous stage's checkpoint. If this
+            # stage produced no checkpoint, every later stage would silently train
+            # from scratch on a broken curriculum — abort instead of wasting budget.
+            if not (SAVE_ROOT / STAGE_CKPT[stage]).exists():
+                remaining = stages[stages.index(stage) + 1:]
+                print(f"  '{STAGE_CKPT[stage]}' was not produced — aborting remaining "
+                      f"stages ({', '.join(remaining)}) to avoid training on a broken chain.")
+                break
+            print("  Checkpoint exists from an earlier run — continuing to next stage...")
 
     print("\n" + "=" * 60)
     print("  TRAINING COMPLETE")

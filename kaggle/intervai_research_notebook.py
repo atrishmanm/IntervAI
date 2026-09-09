@@ -48,13 +48,20 @@ if IS_KAGGLE:
     KAGGLE_WORK = Path("/kaggle/working")
     KAGGLE_REPO = KAGGLE_WORK / "IntervAI"
 
-    # Clone repo if not present
+    # Clone repo if not present, else refresh — a stale clone would silently
+    # run old training code. reset --hard keeps untracked outputs (models/, data/).
     if not KAGGLE_REPO.exists():
         print("[BOOTSTRAP] Cloning IntervAI repo...")
         subprocess.run([
             "git", "clone", "https://github.com/atrishmanm/IntervAI.git",
             str(KAGGLE_REPO)
         ], check=True)
+    else:
+        print("[BOOTSTRAP] Repo exists — refreshing to origin/main...")
+        subprocess.run(["git", "-C", str(KAGGLE_REPO), "fetch", "origin"], check=False)
+        r = subprocess.run(["git", "-C", str(KAGGLE_REPO), "reset", "--hard", "origin/main"], check=False)
+        if r.returncode != 0:
+            print("[BOOTSTRAP] WARN: refresh failed (offline or not a git clone) — using existing code.")
 
     # Change to repo directory
     os.chdir(KAGGLE_REPO)
