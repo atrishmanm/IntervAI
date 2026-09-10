@@ -43,6 +43,21 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+# Reduce CUDA fragmentation in this process (and any children that inherit it).
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
+# Checkpoint each stage must produce, for poisoned-chain detection below.
+STAGE_CKPT = {
+    "pretrain": "pretrained.pt",
+    "domain": "domain_tuned.pt",
+    "instruction": "instruction_tuned.pt",
+    "interview": "interview_tuned.pt",
+    "evaluator": "evaluator.pt",
+    "followup": "final_model.pt",
+    "resume_finetune": "resume_finetuned.pt",
+    "negotiation": "negotiation_tuned.pt",
+}
+
 # ── Curriculum Stages & Proportional Time Budgeting ──────────
 ALL_STAGES = [
     "pretrain", "domain", "instruction", "interview",
@@ -353,8 +368,18 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
     # ── 3.4 Train Classifier ──
     print(f"\n[3.4] Training Classifier ({epochs} epochs)...")
     classifier_model = classifier_model.to(device)
+    # Class weights (inverse frequency, mean-normalized): Mohler is imbalanced
+    # (~71% 'correct') and an unweighted loss collapses to the majority class.
+    _counts = {c: 0 for c in range(4)}
+    for e in train_data:
+        _counts[e["label"]] += 1
+    _w = torch.tensor([len(train_data) / max(_counts[c], 1) for c in range(4)],
+                      dtype=torch.float)
+    _w = _w / _w.mean()
+    print(f"      Class weights (correct/partial/incorrect/off_topic): "
+          f"{[round(x, 2) for x in _w.tolist()]}")
     cls_optimizer = torch.optim.AdamW(classifier_model.parameters(), lr=lr, weight_decay=0.01)
-    cls_loss_fn = nn.CrossEntropyLoss()
+    cls_loss_fn = nn.CrossEntropyLoss(weight=_w.to(device))
     cls_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(cls_optimizer, T_max=epochs)
 
     cls_results = []
@@ -970,6 +995,18 @@ def main():
                     print(f"!! Stage '{s}' FAILED (exit {rc})")
                     failed.append(s)
                     save_progress(s, "failed", elapsed)
+                    # Each stage initializes from the previous stage's checkpoint.
+                    # A failed stage that produced no checkpoint poisons the whole
+                    # remaining curriculum (later stages would train from scratch)
+                    # — abort instead of burning the time budget on a broken chain.
+                    ckpt_name = STAGE_CKPT.get(s, "")
+                    if ckpt_name and not (ckpt_dir / ckpt_name).exists():
+                        remaining = stages[stages.index(s) + 1:]
+                        if remaining:
+                            print(f"  '{ckpt_name}' was not produced — aborting remaining "
+                                  f"stages ({', '.join(remaining)}). Fix the error, then "
+                                  f"re-run with --resume.")
+                        break
                     continue
 
                 print(f"  Stage {s} completed in {elapsed:.1f} min")

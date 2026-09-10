@@ -1271,6 +1271,9 @@ def find_learning_rate(model, dataloader, device, optimizer_factory, config,
     if suggested > config["lr"]:
         suggested = config["lr"]
         print(f"  [auto] Capped to configured peak LR {suggested:.2e}")
+    # Clean up LR finder state (Muon momentum buffers can be large)
+    del opt, losses, lrs
+    torch.cuda.empty_cache()
     return suggested
 
 
@@ -1280,7 +1283,17 @@ def find_learning_rate(model, dataloader, device, optimizer_factory, config,
 
 def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
                        max_batch=64, trials=2):
-    """Try larger per-GPU batch sizes and return the largest that fits memory."""
+    """Try larger per-GPU batch sizes and return the largest that fits memory.
+
+    The profiler runs on the *unwrapped* model (no DataParallel) and does not
+    allocate EMA shadow copies or Muon/AdamW momentum buffers, so the
+    recommended batch is reduced by a safety margin that accounts for:
+
+    * DataParallel model replication + gradient-gather buffers
+    * EMA shadow parameter copy (~model size)
+    * Muon / AdamW optimizer state (momentum + variance buffers)
+    * CUDA context overhead (~500 MB–1 GB)
+    """
     if not torch.cuda.is_available() or len(dataset) == 0:
         return base_batch
     print(f"\n  [auto] Profiling batch size (base={base_batch})...")
@@ -1307,7 +1320,8 @@ def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
             "labels": torch.tensor(labels, dtype=torch.long).to(device),
         }
         try:
-            opt = torch.optim.SGD(model.parameters(), lr=1e-6)
+            # Use AdamW to match real training memory (2x FP32 state per param)
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-6)
             opt.zero_grad()
             with torch.amp.autocast("cuda", enabled=use_fp16):
                 loss = model(input_ids=batch["input_ids"], labels=batch["labels"],
@@ -1325,12 +1339,13 @@ def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
                 opt.step()
             torch.cuda.synchronize()
             return True
-        except torch.cuda.OutOfMemoryError:
+        except (torch.cuda.OutOfMemoryError, RuntimeError):
             torch.cuda.empty_cache()
             return False
-        except RuntimeError:
+        finally:
+            # Free optimizer + batch tensors between trials to avoid leakage
+            del opt, batch
             torch.cuda.empty_cache()
-            return False
 
     best = base_batch
     bs = base_batch
@@ -1343,5 +1358,10 @@ def profile_batch_size(model, dataset, device, base_batch, use_fp16=False,
         else:
             print(f"    batch {bs}: OOM — stopping")
             break
-    print(f"  [auto] Profiling done: recommended per-GPU batch = {best}")
-    return best
+    # Safety margin: profiler runs without DataParallel, EMA, or Muon state.
+    # Empirically ~30% headroom is needed to avoid OOM during real training.
+    safe_best = max(1, int(best * 0.70))
+    if safe_best < best:
+        print(f"  [auto] Applying 30% safety margin: {best} -> {safe_best}")
+    print(f"  [auto] Profiling done: recommended per-GPU batch = {safe_best}")
+    return safe_best

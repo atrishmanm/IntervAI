@@ -30,13 +30,20 @@ Research-grade features:
 """
 
 import argparse
+import gc
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+
+# Reduce CUDA fragmentation (must be set before torch initializes CUDA).
+# Without it the caching allocator can strand GBs as reserved-but-unallocated,
+# turning a run that *should* fit into an OOM partway through training.
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 
 import torch
 from torch.utils.data import DataLoader, random_split
@@ -353,24 +360,30 @@ def run_stage(stage, config, time_budget=None):
                                             base_batch=bs_per_gpu, use_fp16=USE_FP16)
         finally:
             _restore(snap)
-    # DataParallel shards a batch of `bs_per_gpu * NUM_GPUS` into bs_per_gpu/GPU.
-    loader_bs = bs_per_gpu * max(NUM_GPUS, 1)
-    config["batch_size"] = loader_bs
     # Use ≥1 workers on Kaggle for overlap; but keep 0 workers on CPU to avoid
     # spawning issues. persistent_workers requires num_workers > 0.
     num_workers = 2 if (ENV == "kaggle" and torch.cuda.is_available()) else 0
-    train_loader = DataLoader(
-        train_ds, batch_size=loader_bs, shuffle=True,
-        num_workers=num_workers, pin_memory=torch.cuda.is_available(),
-        persistent_workers=(num_workers > 0),
-        collate_fn=pad_collate,
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=loader_bs,
-        num_workers=num_workers, pin_memory=torch.cuda.is_available(),
-        persistent_workers=(num_workers > 0),
-        collate_fn=pad_collate,
-    )
+
+    def _make_loaders(per_gpu_bs):
+        """DataParallel shards a loader batch of per_gpu_bs * NUM_GPUS into
+        per_gpu_bs per GPU. Factory so OOM recovery can rebuild smaller."""
+        lbs = max(1, per_gpu_bs) * max(NUM_GPUS, 1)
+        tl = DataLoader(
+            train_ds, batch_size=lbs, shuffle=True,
+            num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+            persistent_workers=(num_workers > 0),
+            collate_fn=pad_collate,
+        )
+        vl = DataLoader(
+            val_ds, batch_size=lbs,
+            num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+            persistent_workers=(num_workers > 0),
+            collate_fn=pad_collate,
+        )
+        return tl, vl, lbs
+
+    train_loader, val_loader, loader_bs = _make_loaders(bs_per_gpu)
+    config["batch_size"] = loader_bs
     print(f"Train: {len(train_ds)} | Val: {len(val_ds)} | Per-GPU batch: {bs_per_gpu} "
           f"| Loader batch: {loader_bs} | GPUs: {NUM_GPUS}")
 
@@ -509,21 +522,48 @@ def run_stage(stage, config, time_budget=None):
         if hasattr(core, "update_dropout"):
             core.update_dropout(current_step, epoch_total_steps)
 
-        train_loss, steps, global_step = train_epoch(
-            model, train_loader, opt, sched, DEVICE,
-            grad_clip=config["grad_clip"],
-            grad_accum_steps=config["grad_accum_steps"],
-            use_fp16=USE_FP16,
-            start_step=global_step,
-            checkpoint_every=config.get("ckpt_every"),
-            checkpoint_path=resume_path,
-            on_checkpoint=_mid_epoch_save,
-            scaler=scaler,
-            label_smoothing=config.get("label_smoothing", 0.05),
-            analytics=analytics,
-            max_minutes=time_budget,
-            stage_start_time=t0,
-        )
+        # OOM-resilient training: the batch profiler runs without optimizer/EMA
+        # state and without DataParallel overhead, so the real step can OOM even
+        # when profiling passed. On OOM, halve the per-GPU batch (doubling grad
+        # accumulation to keep the effective batch stable) and retry the epoch.
+        def _is_oom(exc):
+            """Check if exception is a CUDA OOM (handles class hierarchy differences)."""
+            msg = str(exc).lower()
+            return ("out of memory" in msg or "cuda" in msg and "oom" in msg)
+        for _oom_attempt in range(3):
+            try:
+                train_loss, steps, global_step = train_epoch(
+                    model, train_loader, opt, sched, DEVICE,
+                    grad_clip=config["grad_clip"],
+                    grad_accum_steps=config["grad_accum_steps"],
+                    use_fp16=USE_FP16,
+                    start_step=global_step,
+                    checkpoint_every=config.get("ckpt_every"),
+                    checkpoint_path=resume_path,
+                    on_checkpoint=_mid_epoch_save,
+                    scaler=scaler,
+                    label_smoothing=config.get("label_smoothing", 0.05),
+                    analytics=analytics,
+                    max_minutes=time_budget,
+                    stage_start_time=t0,
+                )
+                break
+            except Exception as e:
+                if not _is_oom(e):
+                    raise
+                gc.collect()
+                torch.cuda.empty_cache()
+                opt.zero_grad(set_to_none=True)
+                if _oom_attempt >= 2 or bs_per_gpu <= 1:
+                    raise
+                new_bs = max(1, bs_per_gpu // 2)
+                print(f"  [OOM] CUDA out of memory at per-GPU batch {bs_per_gpu} — "
+                      f"retrying with {new_bs} (grad_accum={config['grad_accum_steps']})")
+                config["grad_accum_steps"] = max(
+                    1, config["grad_accum_steps"] * max(1, bs_per_gpu // new_bs))
+                bs_per_gpu = new_bs
+                train_loader, val_loader, loader_bs = _make_loaders(bs_per_gpu)
+                config["batch_size"] = loader_bs
         ema.update()
 
         # Update SWA in the final 25% of epochs
