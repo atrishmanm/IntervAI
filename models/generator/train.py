@@ -417,7 +417,7 @@ def run_stage(stage, config, time_budget=None):
         config["lr"] = lr
     opt = _optimizer(config["lr"])
 
-    total_steps = len(train_loader) // config["grad_accum_steps"] * config["epochs"]
+    total_steps = len(train_loader) // config["grad_accum_steps"] * config.get("max_epochs", 20)
     warmup = max(1, int(total_steps * config["warmup_ratio"]))
     stable_pct = config.get("stable_pct", 0.80)
     decay_pct = config.get("decay_pct", 0.18)
@@ -503,17 +503,43 @@ def run_stage(stage, config, time_budget=None):
                         scaler=scaler)
 
     # Initialize training analytics (15+ metrics)
-    total_steps = len(train_loader) // config["grad_accum_steps"] * config["epochs"]
+    total_steps = len(train_loader) // config["grad_accum_steps"] * config.get("max_epochs", 20)
     analytics = TrainingAnalytics(model, total_steps, stage_name=stage)
 
-    for epoch in range(start_epoch, config["epochs"]):
+    # ── Adaptive training loop ──────────────────────────────────────
+    # Instead of fixed epochs, we train until convergence:
+    #   1. val_loss improvement < min_delta for `patience` epochs → stop
+    #   2. val_loss increasing while train_loss decreasing → overfitting → stop
+    #   3. Time budget >= 80% used → stop after current epoch
+    #   4. Hard cap at max_epochs as safety net
+    #
+    # SWA activates only in the final third of training (when improvement slows),
+    # so it averages weights from the convergence region, not the whole run.
+    max_epochs = config.get("max_epochs", 20)
+    min_delta = config.get("min_delta", 0.005)   # 0.5% relative improvement
+    plateau_patience = config.get("patience", 3)
+    patience_left = plateau_patience
+    prev_val_loss = float("inf")
+    best_epoch = -1
+    swa_started = False
+    val_loss_history = []  # for overfitting detection
+
+    for epoch in range(start_epoch, max_epochs):
         # Check overall stage time budget before starting epoch
-        if time_budget and (time.time() - t0) / 60 >= time_budget:
-            print(f"\n  [TIME BUDGET REACHED] Stage '{stage}' reached allocated budget limit ({time_budget:.1f} min). Wrapping up stage...")
+        elapsed_min = (time.time() - t0) / 60.0
+        if time_budget and elapsed_min >= time_budget:
+            print(f"\n  [TIME BUDGET] Stage '{stage}' reached budget ({time_budget:.1f} min). Finalizing...")
             break
+        # Soft budget: if >= 80% used, finish current epoch then stop
+        if time_budget and elapsed_min >= time_budget * 0.80 and epoch > start_epoch:
+            print(f"\n  [TIME BUDGET SOFT] {elapsed_min:.0f}/{time_budget:.0f} min used ({100*elapsed_min/time_budget:.0f}%). "
+                  f"Finishing epoch {epoch+1} then stopping...")
+            run_final_epoch = True
+        else:
+            run_final_epoch = False
 
         cur_epoch[0] = epoch
-        print(f"\n--- Epoch {epoch+1}/{config['epochs']} ---")
+        print(f"\n--- Epoch {epoch+1}/max{max_epochs} ---")
 
         # Update dynamic dropout (guarded: a wrapper mismatch must not kill the stage)
         core = unwrap_model(model)
@@ -566,8 +592,16 @@ def run_stage(stage, config, time_budget=None):
                 config["batch_size"] = loader_bs
         ema.update()
 
-        # Update SWA in the final 25% of epochs
-        if swa and (epoch + 1) >= max(1, int(config["epochs"] * 0.75)):
+        # Update SWA when improvement slows (convergence region)
+        # This ensures SWA averages weights from the flat part of the loss curve,
+        # not from early high-variance training.
+        val_loss_history.append(val_loss)
+        if len(val_loss_history) >= 3:
+            recent_improvement = val_loss_history[-3] - val_loss_history[-1]
+            if recent_improvement < min_delta and not swa_started:
+                swa_started = True
+                print(f"  [SWA] Improvement slowed (Δ={recent_improvement:.4f}). Activating SWA from here.")
+        if swa and swa_started:
             swa.update(unwrap_model(model))
             print("  [Research] SWA checkpoint captured")
 
@@ -606,23 +640,49 @@ def run_stage(stage, config, time_budget=None):
             "dropout_rate": unwrap_model(model).get_dropout_rate(),
         })
 
-        # Best-checkpoint tracking + early stopping
-        # Use regular val_loss (not EMA) for checkpoint selection — EMA with
-        # high decay can lag behind the real model for several epochs, causing
-        # it to report near-random loss even when the model has learned.
-        if val_loss < best_val_loss:
+        # ── Adaptive stopping logic ──────────────────────────────────────
+        # Decision tree:
+        #   1. val_loss improved by > min_delta → reset patience, save checkpoint
+        #   2. val_loss improved but < min_delta → decrement patience (plateau)
+        #   3. val_loss WORSE and train_loss improved → overfitting → stop
+        #   4. Soft time budget reached → stop after saving
+
+        improved = val_loss < best_val_loss - (best_val_loss * min_delta)
+        improving = val_loss < prev_val_loss
+        prev_val_loss = val_loss
+
+        if improved:
             best_val_loss = val_loss
-            patience_left = config.get("patience", 2)
+            best_epoch = epoch
+            patience_left = plateau_patience
             save_checkpoint(unwrap_model(model), opt, sched, epoch, best_val_loss, ckpt_path,
                             step=global_step,
-                            extra={"stage": stage, "best_val_loss": best_val_loss, "val_loss": val_loss},
+                            extra={"stage": stage, "best_val_loss": best_val_loss,
+                                   "val_loss": val_loss, "epoch": epoch},
                             scaler=scaler)
+            print(f"  [best] val_loss={val_loss:.4f} (improved, patience reset to {plateau_patience})")
         else:
             patience_left -= 1
-            print(f"  [early] val_loss did not improve ({patience_left} left)")
-            if patience_left <= 0:
-                print(f"  Early stopping after epoch {epoch+1} (best val_loss={best_val_loss:.4f})")
-                break
+            pct_improve = ((best_val_loss - val_loss) / best_val_loss * 100) if best_val_loss > 0 else 0
+            print(f"  [plateau] val_loss={val_loss:.4f} (best={best_val_loss:.4f}, "
+                  f"{pct_improve:+.1f}% from best, patience {patience_left}/{plateau_patience})")
+
+        # Overfitting detection: val_loss increasing while train_loss keeps decreasing
+        overfitting = (not improving and len(val_loss_history) >= 3
+                       and train_loss < val_loss_history[-1] * 0.95)
+
+        # Stop conditions
+        if patience_left <= 0:
+            print(f"\n  [CONVERGED] No improvement for {plateau_patience} epochs. "
+                  f"Best val_loss={best_val_loss:.4f} at epoch {best_epoch+1}")
+            break
+        if overfitting:
+            print(f"\n  [OVERFITTING] val_loss={val_loss:.4f} increasing while train_loss={train_loss:.4f} decreasing. "
+                  f"Best val_loss={best_val_loss:.4f} at epoch {best_epoch+1}")
+            break
+        if run_final_epoch:
+            print(f"\n  [TIME BUDGET] Stopping after epoch {epoch+1} (best val_loss={best_val_loss:.4f} at epoch {best_epoch+1})")
+            break
 
     # Apply SWA weights if collected — save to a separate file so we don't
     # overwrite the best checkpoint that downstream stages initialize from.
