@@ -14,7 +14,7 @@ from pathlib import Path
 
 REPO_URL = "https://github.com/atrishmanm/IntervAI.git"
 REPO_DIR = Path("/kaggle/working/IntervAI")
-SCRIPT = REPO_DIR / "kaggle" / "intervai_research_notebook.py"
+SCRIPT = REPO_DIR / "kaggle" / "train_on_kaggle.py"
 
 # Step 1: Clone repo if not present, otherwise refresh it — /kaggle/working can
 # persist across runs of the same kernel, so an existing clone may predate
