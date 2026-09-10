@@ -181,9 +181,9 @@ def resolve_data_path(rel: str):
 
 # Maximum unique examples per curriculum stage to guarantee completion within 8 hours on 2x T4
 STAGE_MAX_EXAMPLES = {
-    "pretrain": 40_000,
-    "domain": 25_000,
-    "instruction": 20_000,
+    "pretrain": 50_000,
+    "domain": 30_000,
+    "instruction": 25_000,
     "interview": 30_000,
     "evaluator": 15_000,
     "followup": 15_000,
@@ -606,17 +606,16 @@ def run_stage(stage, config, time_budget=None):
             "dropout_rate": unwrap_model(model).get_dropout_rate(),
         })
 
-        # Best-checkpoint tracking + early stopping (use EMA weights for stability)
-        ema.apply_shadow()
-        ema_val = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
-        ema.restore()
-        ema_val_loss = ema_val["loss"]
-        if ema_val_loss < best_val_loss:
-            best_val_loss = ema_val_loss
+        # Best-checkpoint tracking + early stopping
+        # Use regular val_loss (not EMA) for checkpoint selection — EMA with
+        # high decay can lag behind the real model for several epochs, causing
+        # it to report near-random loss even when the model has learned.
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             patience_left = config.get("patience", 2)
             save_checkpoint(unwrap_model(model), opt, sched, epoch, best_val_loss, ckpt_path,
                             step=global_step,
-                            extra={"stage": stage, "best_val_loss": best_val_loss, "ema_val_loss": ema_val_loss},
+                            extra={"stage": stage, "best_val_loss": best_val_loss, "val_loss": val_loss},
                             scaler=scaler)
         else:
             patience_left -= 1
@@ -625,14 +624,25 @@ def run_stage(stage, config, time_budget=None):
                 print(f"  Early stopping after epoch {epoch+1} (best val_loss={best_val_loss:.4f})")
                 break
 
-    # Apply SWA weights if collected
+    # Apply SWA weights if collected — save to a separate file so we don't
+    # overwrite the best checkpoint that downstream stages initialize from.
     if swa and swa.n_models > 0:
         swa.apply(unwrap_model(model))
+        swa_path = ckpt_path.with_name(ckpt_path.stem + "_swa" + ckpt_path.suffix)
         print(f"  [Research] SWA applied across {swa.n_models} checkpoints to final model")
-        save_checkpoint(unwrap_model(model), opt, sched, cur_epoch[0], best_val_loss, ckpt_path,
+        save_checkpoint(unwrap_model(model), opt, sched, cur_epoch[0], best_val_loss, swa_path,
                         step=global_step,
                         extra={"stage": stage, "best_val_loss": best_val_loss, "swa_applied": True},
                         scaler=scaler)
+        # Restore best checkpoint weights so downstream stages use the best model
+        best_ckpt_path = ckpt_path
+        if best_ckpt_path.exists():
+            ckpt = torch.load(best_ckpt_path, map_location="cpu", weights_only=False)
+            sd = ckpt["model_state_dict"]
+            if any(k.startswith("module.") for k in sd):
+                sd = {k[len("module."):]: v for k, v in sd.items()}
+            unwrap_model(model).load_state_dict(sd)
+            print(f"  Restored best checkpoint weights for downstream stages")
 
     # Remove GC hooks
     for h in gc_hooks:
