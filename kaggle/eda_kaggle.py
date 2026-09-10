@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -343,14 +344,41 @@ def section2_eda(raw_dir: Path) -> dict:
     return eda_results
 
 
+def copy_datasets_from_input(raw_dir: Path):
+    """On Kaggle, copy dataset files from /kaggle/input into data/raw so the
+    EDA is self-sufficient (mirrors train_on_kaggle.py's copy step)."""
+    input_dir = Path("/kaggle/input")
+    if not input_dir.exists():
+        return
+    if any(raw_dir.glob("*.jsonl")) or any(raw_dir.glob("*.json")):
+        return  # already populated
+    print("Copying datasets from /kaggle/input into data/raw ...")
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in sorted(input_dir.rglob("*")):
+        if f.is_file() and f.suffix in (".jsonl", ".json"):
+            dest = raw_dir / f.name
+            if not dest.exists():
+                try:
+                    shutil.copy2(f, dest)
+                    n += 1
+                    print(f"    + {f.name}")
+                except Exception as e:
+                    print(f"    [skip] {f.name}: {e}")
+    print(f"  Copied {n} dataset files.")
+
+
 def main():
     parse_args()
     if SMOKE_TEST:
         print("[SMOKE TEST MODE] EDA scans capped at 200 rows/file")
 
     raw_dir = ROOT / "data" / "raw"
-    if not raw_dir.exists():
-        print(f"No data/raw directory at {raw_dir} — copy datasets first.")
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    copy_datasets_from_input(raw_dir)
+    if not any(raw_dir.glob("*.jsonl")) and not any(raw_dir.glob("*.json")):
+        print(f"No datasets found in {raw_dir} and /kaggle/input is unavailable "
+              "— add your dataset to the Kaggle notebook, then re-run.")
         sys.exit(1)
 
     section1_problem_identification(raw_dir)
