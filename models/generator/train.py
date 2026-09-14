@@ -592,6 +592,9 @@ def run_stage(stage, config, time_budget=None):
                 config["batch_size"] = loader_bs
         ema.update()
 
+        val = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
+        val_loss, val_ppl = val["loss"], val["ppl"]
+
         # Update SWA when improvement slows (convergence region)
         # This ensures SWA averages weights from the flat part of the loss curve,
         # not from early high-variance training.
@@ -604,9 +607,6 @@ def run_stage(stage, config, time_budget=None):
         if swa and swa_started:
             swa.update(unwrap_model(model))
             print("  [Research] SWA checkpoint captured")
-
-        val = evaluate(model, val_loader, DEVICE, use_fp16=USE_FP16)
-        val_loss, val_ppl = val["loss"], val["ppl"]
 
         # Qualitative generation check for monitoring interview dialogue capability
         try:
