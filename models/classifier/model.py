@@ -136,28 +136,28 @@ class TransformerEncoderLayer(nn.Module):
 
 class AnswerClassifier(nn.Module):
     """
-    Small Transformer encoder classifier.
+    Transformer encoder classifier for answer quality assessment.
 
-    Hyperparameters (defaults sized for fast training on modest hardware):
+    Hyperparameters:
         vocab_size  : must match trained tokenizer vocab size
-        embed_dim   : 128
-        n_heads     : 4
-        ff_dim      : 512
-        n_layers    : 3
-        max_len     : 256
-        dropout     : 0.1
+        embed_dim   : 256
+        n_heads     : 8
+        ff_dim      : 1024
+        n_layers    : 6
+        max_len     : 512
+        dropout     : 0.3
         num_classes : 4
     """
 
     def __init__(
         self,
         vocab_size: int,
-        embed_dim: int   = 128,
-        n_heads: int     = 4,
-        ff_dim: int      = 512,
-        n_layers: int    = 3,
-        max_len: int     = 256,
-        dropout: float   = 0.1,
+        embed_dim: int   = 256,
+        n_heads: int     = 8,
+        ff_dim: int      = 1024,
+        n_layers: int    = 6,
+        max_len: int     = 512,
+        dropout: float   = 0.3,
         num_classes: int = NUM_CLASSES,
         pad_id: int      = 0,
     ):
@@ -175,6 +175,9 @@ class AnswerClassifier(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
 
         self.classifier = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(embed_dim, embed_dim // 2),
             nn.GELU(),
             nn.Dropout(dropout),

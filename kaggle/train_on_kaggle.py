@@ -110,7 +110,7 @@ def parse_args():
         "resume": False,
         "time_budget": 480,
         "limit": None,
-        "ml_epochs": 15,
+        "ml_epochs": 30,
     }
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg == "--stage" and i < len(sys.argv) - 1:
@@ -252,8 +252,8 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
 
     class AnswerRegressor(nn.Module):
         """Transformer encoder that outputs a single continuous score."""
-        def __init__(self, vocab_size, embed_dim=128, n_heads=4, ff_dim=512,
-                     n_layers=3, max_len=256, dropout=0.1, pad_id=0):
+        def __init__(self, vocab_size, embed_dim=256, n_heads=8, ff_dim=1024,
+                     n_layers=6, max_len=512, dropout=0.3, pad_id=0):
             super().__init__()
             self.pad_id = pad_id
             self.token_embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=pad_id)
@@ -267,11 +267,14 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
             ])
             self.norm = nn.LayerNorm(embed_dim)
             self.head = nn.Sequential(
+                nn.Linear(embed_dim, embed_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
                 nn.Linear(embed_dim, embed_dim // 2),
                 nn.GELU(),
                 nn.Dropout(dropout),
                 nn.Linear(embed_dim // 2, 1),
-                nn.Sigmoid(),  # Output in [0, 1]
+                nn.Sigmoid(),
             )
             self._init_weights()
 
@@ -309,6 +312,17 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
         print("  [WARN] mohler_asag.jsonl not found — Section 3 skipped.")
         return None
 
+    import re
+    def _clean_html(text):
+        text = re.sub(r'<br\s*/?>', ' ', text)
+        text = re.sub(r'&nbsp;', ' ', text)
+        text = re.sub(r'&amp;', '&', text)
+        text = re.sub(r'&lt;', '<', text)
+        text = re.sub(r'&gt;', '>', text)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+
     train_examples = []
     with open(mohler_path, encoding="utf-8") as f:
         for i, line in enumerate(f):
@@ -320,17 +334,29 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
             score = float(rec.get("score_avg", 0) or rec.get("score", 0)) / 5.0
             score = max(0.0, min(1.0, score))
             label = 0 if score > 0.75 else (1 if score > 0.5 else (2 if score > 0.25 else 3))
+            sa = _clean_html(rec.get("student_answer", ""))
+            ra = _clean_html(rec.get("instructor_answer", ""))
+            q = _clean_html(rec.get("question", ""))
+            if not sa.strip():
+                continue
             train_examples.append({
-                "question": rec.get("question", ""),
-                "student_answer": rec.get("student_answer", ""),
-                "reference_answer": rec.get("instructor_answer", ""),
+                "question": q,
+                "student_answer": sa,
+                "reference_answer": ra,
                 "score": score,
                 "label": label,
             })
     print(f"      Loaded {len(train_examples):,} graded answers")
 
+    _label_names = ["correct", "partial", "incorrect", "off_topic"]
+    _counts = {}
+    for e in train_examples:
+        _counts[e["label"]] = _counts.get(e["label"], 0) + 1
+    for k in sorted(_counts):
+        print(f"        class {_label_names[k]} ({k}): {_counts[k]} ({_counts[k]/len(train_examples)*100:.1f}%)")
+
     class ScoringDataset(Dataset):
-        def __init__(self, examples, tokenizer, max_len=256):
+        def __init__(self, examples, tokenizer, max_len=512):
             self.examples = examples
             self.tokenizer = tokenizer
             self.max_len = max_len
@@ -340,7 +366,7 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
 
         def __getitem__(self, idx):
             ex = self.examples[idx]
-            text = f"{ex['student_answer'][:500]} [SEP] {ex['reference_answer'][:300]}"
+            text = f"Question: {ex['question'][:200]} [SEP] Student: {ex['student_answer'][:500]} [SEP] Reference: {ex['reference_answer'][:300]}"
             ids = self.tokenizer.encode(text).ids[:self.max_len]
             ids = ids + [0] * (self.max_len - len(ids))
             return (
@@ -356,33 +382,44 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
 
     train_ds = ScoringDataset(train_data, tokenizer)
     val_ds = ScoringDataset(val_data, tokenizer)
-    batch_size = 32
+    batch_size = 16
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
     print(f"      Train: {len(train_ds)} | Val: {len(val_ds)} | Batch: {batch_size}")
 
     epochs = ml_epochs
-    lr = 2e-4
+    lr = 3e-4
     device = DEVICE
 
     # ── 3.4 Train Classifier ──
     print(f"\n[3.4] Training Classifier ({epochs} epochs)...")
     classifier_model = classifier_model.to(device)
-    # Class weights (inverse frequency, mean-normalized): Mohler is imbalanced
-    # (~71% 'correct') and an unweighted loss collapses to the majority class.
     _counts = {c: 0 for c in range(4)}
     for e in train_data:
         _counts[e["label"]] += 1
     _w = torch.tensor([len(train_data) / max(_counts[c], 1) for c in range(4)],
                       dtype=torch.float)
+    _w = torch.sqrt(_w)
     _w = _w / _w.mean()
     print(f"      Class weights (correct/partial/incorrect/off_topic): "
           f"{[round(x, 2) for x in _w.tolist()]}")
-    cls_optimizer = torch.optim.AdamW(classifier_model.parameters(), lr=lr, weight_decay=0.01)
-    cls_loss_fn = nn.CrossEntropyLoss(weight=_w.to(device))
-    cls_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(cls_optimizer, T_max=epochs)
+    cls_optimizer = torch.optim.AdamW(classifier_model.parameters(), lr=lr, weight_decay=0.05)
+    cls_loss_fn = nn.CrossEntropyLoss(weight=_w.to(device), label_smoothing=0.1)
+    total_steps = epochs * len(train_loader)
+    warmup_steps = int(0.1 * total_steps)
+    def _lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(warmup_steps, 1)
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    cls_scheduler = torch.optim.lr_scheduler.LambdaLR(cls_optimizer, _lr_lambda)
 
     cls_results = []
+    best_val_acc = 0.0
+    best_cls_state = None
+    patience_ctr = 0
+    cls_patience = 7
+
     for epoch in range(1, epochs + 1):
         classifier_model.train()
         total_loss, correct, total = 0.0, 0, 0
@@ -394,13 +431,14 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
             loss.backward()
             nn.utils.clip_grad_norm_(classifier_model.parameters(), 1.0)
             cls_optimizer.step()
+            cls_scheduler.step()
             total_loss += loss.item() * ids.size(0)
             correct += (logits.argmax(-1) == labels).sum().item()
             total += ids.size(0)
-        cls_scheduler.step()
 
         classifier_model.eval()
         val_loss, val_correct, val_total = 0.0, 0, 0
+        all_preds, all_labels = [], []
         with torch.no_grad():
             for ids, labels, _ in val_loader:
                 ids, labels = ids.to(device), labels.to(device)
@@ -408,23 +446,54 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
                 val_loss += cls_loss_fn(logits, labels).item() * ids.size(0)
                 val_correct += (logits.argmax(-1) == labels).sum().item()
                 val_total += ids.size(0)
+                all_preds.extend(logits.argmax(-1).cpu().tolist())
+                all_labels.extend(labels.cpu().tolist())
+        val_acc = val_correct / max(val_total, 1)
         cls_results.append({
             "epoch": epoch, "train_loss": total_loss / max(total, 1),
             "train_acc": correct / max(total, 1),
             "val_loss": val_loss / max(val_total, 1),
-            "val_acc": val_correct / max(val_total, 1),
+            "val_acc": val_acc,
         })
+        marker = ""
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_cls_state = {k: v.cpu().clone() for k, v in classifier_model.state_dict().items()}
+            patience_ctr = 0
+            marker = " * best *"
+        else:
+            patience_ctr += 1
         print(f"      Epoch {epoch:>2d}: train_loss={cls_results[-1]['train_loss']:.4f} "
-              f"acc={cls_results[-1]['train_acc']:.4f} val_acc={cls_results[-1]['val_acc']:.4f}")
+              f"acc={cls_results[-1]['train_acc']:.4f} val_acc={val_acc:.4f} "
+              f"lr={cls_scheduler.get_last_lr()[0]:.2e}{marker}")
+        if patience_ctr >= cls_patience:
+            print(f"      [EARLY STOP] No improvement for {cls_patience} epochs")
+            break
+
+    if best_cls_state is not None:
+        classifier_model.load_state_dict(best_cls_state)
+        print(f"      Restored best model (val_acc={best_val_acc:.4f})")
 
     # ── 3.5 Train Regressor ──
     print(f"\n[3.5] Training Regressor ({epochs} epochs)...")
     regressor_model = regressor_model.to(device)
-    reg_optimizer = torch.optim.AdamW(regressor_model.parameters(), lr=lr, weight_decay=0.01)
+    reg_optimizer = torch.optim.AdamW(regressor_model.parameters(), lr=lr, weight_decay=0.05)
     reg_loss_fn = nn.MSELoss()
-    reg_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(reg_optimizer, T_max=epochs)
+    reg_total_steps = epochs * len(train_loader)
+    reg_warmup_steps = int(0.1 * reg_total_steps)
+    def _reg_lr_lambda(step):
+        if step < reg_warmup_steps:
+            return step / max(reg_warmup_steps, 1)
+        progress = (step - reg_warmup_steps) / max(reg_total_steps - reg_warmup_steps, 1)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    reg_scheduler = torch.optim.lr_scheduler.LambdaLR(reg_optimizer, _reg_lr_lambda)
 
     reg_results = []
+    best_val_rmse = float("inf")
+    best_reg_state = None
+    reg_patience_ctr = 0
+    reg_patience = 7
+
     for epoch in range(1, epochs + 1):
         regressor_model.train()
         total_loss, total_se, total = 0.0, 0.0, 0
@@ -436,10 +505,10 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
             loss.backward()
             nn.utils.clip_grad_norm_(regressor_model.parameters(), 1.0)
             reg_optimizer.step()
+            reg_scheduler.step()
             total_loss += loss.item() * ids.size(0)
             total_se += ((preds - scores) ** 2).sum().item()
             total += ids.size(0)
-        reg_scheduler.step()
         train_rmse = math.sqrt(total_loss / max(total, 1))
 
         regressor_model.eval()
@@ -451,13 +520,29 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
                 val_se += ((preds - scores) ** 2).sum().item()
                 val_ae += (preds - scores).abs().sum().item()
                 val_total += ids.size(0)
+        val_rmse = math.sqrt(val_se / max(val_total, 1))
         reg_results.append({
             "epoch": epoch, "train_rmse": train_rmse,
-            "val_rmse": math.sqrt(val_se / max(val_total, 1)),
+            "val_rmse": val_rmse,
             "val_mae": val_ae / max(val_total, 1),
         })
+        marker = ""
+        if val_rmse < best_val_rmse:
+            best_val_rmse = val_rmse
+            best_reg_state = {k: v.cpu().clone() for k, v in regressor_model.state_dict().items()}
+            reg_patience_ctr = 0
+            marker = " * best *"
+        else:
+            reg_patience_ctr += 1
         print(f"      Epoch {epoch:>2d}: train_rmse={train_rmse:.4f} "
-              f"val_rmse={reg_results[-1]['val_rmse']:.4f} val_mae={reg_results[-1]['val_mae']:.4f}")
+              f"val_rmse={val_rmse:.4f} val_mae={reg_results[-1]['val_mae']:.4f}{marker}")
+        if reg_patience_ctr >= reg_patience:
+            print(f"      [EARLY STOP] No improvement for {reg_patience} epochs")
+            break
+
+    if best_reg_state is not None:
+        regressor_model.load_state_dict(best_reg_state)
+        print(f"      Restored best model (val_rmse={best_val_rmse:.4f})")
 
     # ── 3.6 Real sklearn baselines (same split, TF-IDF features) ──
     print("\n[3.6] Baselines (TF-IDF + classical models, same split)...")
@@ -469,7 +554,7 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
         from sklearn.pipeline import make_pipeline
 
         def _text(ex):
-            return f"{ex['student_answer'][:500]} {ex['reference_answer'][:300]}"
+            return f"Question: {ex['question'][:200]} Student: {ex['student_answer'][:500]} Reference: {ex['reference_answer'][:300]}"
 
         X_train = [_text(e) for e in train_data]
         X_val = [_text(e) for e in val_data]
