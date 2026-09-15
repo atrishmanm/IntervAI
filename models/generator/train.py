@@ -647,7 +647,10 @@ def run_stage(stage, config, time_budget=None):
         #   3. val_loss WORSE and train_loss improved → overfitting → stop
         #   4. Soft time budget reached → stop after saving
 
-        improved = val_loss < best_val_loss - (best_val_loss * min_delta)
+        if best_val_loss == float("inf"):
+            improved = True
+        else:
+            improved = val_loss < best_val_loss - (best_val_loss * min_delta)
         improving = val_loss < prev_val_loss
         prev_val_loss = val_loss
 
