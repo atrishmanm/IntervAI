@@ -1,15 +1,14 @@
 {
-  "id": "atrishmanm/intervai-v4",
-  "title": "IntervAI v4 - Full Pipeline (80%+ Accuracy)",
+  "id": "atrishmanmukherjee/intervai-v4",
+  "title": "IntervAI_v4",
   "code_file": "intervai-v4.py",
   "language": "python",
   "kernel_type": "script",
-  "is_private": true,
-  "enable_gpu": true,
-  "enable_internet": true,
+  "kernel_sources": [],
   "dataset_sources": [
-    "atrishmanm/intervai-data"
+    "atrishmanmukherjee/intervai-data"
   ],
-  "competition_sources": [],
-  "kernel_sources": []
+  "enable_gpu": "true",
+  "enable_internet": "true",
+  "machine_shape": "gpu-basic"
 }

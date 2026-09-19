@@ -133,4 +133,3 @@ for stage in ["pretrain", "domain", "instruction", "interview", "evaluator", "fo
                 pass
 
 print("\n  Done. Download checkpoints from /kaggle/working/IntervAI/models/generator/saved/")
-""", "Description": "New V4 Kaggle notebook that runs the full pipeline via train_on_kaggle.py with all fixes applied"
