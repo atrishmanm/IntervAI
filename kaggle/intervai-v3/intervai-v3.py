@@ -70,16 +70,9 @@ if not os.path.exists(tok_path):
 else:
     print(f"Tokenizer already present: {tok_path}")
 
-# ── 4. Run STAGED training with verification ──────────────────
+# ── 4. Run PRETRAIN ONLY, then stop for verification ───────────
 STAGES = [
     ("pretrain", 168),      # ~168 min (35% of 480)
-    ("domain", 72),         # ~72 min
-    ("instruction", 58),    # ~58 min
-    ("interview", 86),      # ~86 min
-    ("evaluator", 38),      # ~38 min
-    ("followup", 20),       # ~20 min
-    ("resume_finetune", 20),# ~20 min
-    ("negotiation", 20),    # ~20 min
 ]
 
 STAGE_CKPT = {
