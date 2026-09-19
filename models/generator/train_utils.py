@@ -277,31 +277,43 @@ class PackedDataset(Dataset):
 
     def _pack_sequences(self):
         packed = []
-        current_seq = []
+        current_ids = []
+        current_labels = []
         current_len = 0
 
         for ex in self.examples:
             tokens = ex.get("input_ids", [])
+            labels = ex.get("labels", [])
+            # Convert tensors to lists if needed
+            if hasattr(tokens, "tolist"):
+                tokens = tokens.tolist()
+            if hasattr(labels, "tolist"):
+                labels = labels.tolist()
             if not tokens:
                 continue
+            # If no labels provided, fall back to input_ids as labels
+            if not labels:
+                labels = list(tokens)
             seq_len = len(tokens)
 
             if current_len + seq_len <= self.max_len:
-                current_seq.extend(tokens)
+                current_ids.extend(tokens)
+                current_labels.extend(labels[:seq_len])
                 current_len += seq_len
             else:
-                if current_seq:
+                if current_ids:
                     packed.append({
-                        "input_ids": current_seq,
-                        "labels": current_seq.copy(),
+                        "input_ids": current_ids,
+                        "labels": current_labels,
                     })
-                current_seq = tokens
+                current_ids = list(tokens)
+                current_labels = list(labels[:seq_len])
                 current_len = seq_len
 
-        if current_seq:
+        if current_ids:
             packed.append({
-                "input_ids": current_seq,
-                "labels": current_seq.copy(),
+                "input_ids": current_ids,
+                "labels": current_labels,
             })
         return packed
 
@@ -316,16 +328,16 @@ class PackedDataset(Dataset):
         }
 
 
-def pad_collate(batch, pad_token_id=0):
+def pad_collate(batch, pad_token_id=0, label_pad_id=-100):
     """Universal collate_fn: pads variable-length sequences to the batch max.
 
     Works with both tensor and list input_ids/labels. This is required
     whenever sequences are NOT pre-padded to a fixed length (e.g. packed
     datasets, _Wrapper datasets, or the LR-finder mini-loader).
 
-    Each sample's input_ids and labels are padded to the same length
-    (the per-sample max of the two fields), then the whole batch is
-    padded to the batch-level max.
+    input_ids are padded with pad_token_id (0 = [PAD] embedding).
+    labels are padded with label_pad_id (-100) so CrossEntropyLoss
+    with ignore_index=-100 correctly ignores all padding positions.
     """
     def _to_list(x):
         if isinstance(x, torch.Tensor):
@@ -344,7 +356,7 @@ def pad_collate(batch, pad_token_id=0):
         # Reconcile to same length within the sample
         sample_max = max(len(ids), len(lbs))
         ids = ids + [pad_token_id] * (sample_max - len(ids))
-        lbs = lbs + [pad_token_id] * (sample_max - len(lbs))
+        lbs = lbs + [label_pad_id] * (sample_max - len(lbs))
         pairs.append((ids, lbs))
         max_len = max(max_len, sample_max)
 
@@ -352,12 +364,13 @@ def pad_collate(batch, pad_token_id=0):
     for ids, lbs in pairs:
         pad_len = max_len - len(ids)
         input_ids_out.append(ids + [pad_token_id] * pad_len)
-        labels_out.append(lbs  + [pad_token_id] * pad_len)
+        labels_out.append(lbs  + [label_pad_id] * pad_len)
 
     return {
         "input_ids": torch.tensor(input_ids_out, dtype=torch.long),
         "labels":    torch.tensor(labels_out,    dtype=torch.long),
     }
+
 
 
 # Keep old name as alias for backward compat
@@ -898,7 +911,10 @@ def evaluate(model, dataloader, device, use_fp16=False, tokenizer=None, stage=""
         preds = shift_logits.argmax(dim=-1)
         top5 = shift_logits.topk(5, dim=-1).indices
 
-        mask = shift_labels != unwrap_model(model).pad_id
+        # Exclude both pad_id (0) AND -100 (assistant-only masked positions)
+        # so tok_acc measures only the tokens the model was trained to predict.
+        pad_id = unwrap_model(model).pad_id
+        mask = (shift_labels != pad_id) & (shift_labels != -100)
 
         correct_tok += ((preds == shift_labels) & mask).sum().item()
         correct_top5 += ((shift_labels.unsqueeze(-1) == top5) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
@@ -1078,7 +1094,8 @@ def make_training_configs(env):
             "lr": 8e-4, "warmup_ratio": 0.01, "weight_decay": 0.1,
             "betas": (0.9, 0.95), "max_epochs": 20, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
-            "patience": 3, "min_delta": 0.005, "ckpt_every": 1000, "lr_finder": True,
+            # patience=2: exit pretrain early, save time for fine-tuning stages
+            "patience": 2, "min_delta": 0.005, "ckpt_every": 1000, "lr_finder": True,
             "ema_decay": 0.95, "label_smoothing": 0.03,
             "schedule": "cosine", "stable_pct": 0.80, "decay_pct": 0.18,
             "gradient_checkpointing": False,
@@ -1104,10 +1121,10 @@ def make_training_configs(env):
         },
         "instruction": {
             "lr": 2e-4, "warmup_ratio": 0.03, "weight_decay": 0.05,
-            "betas": (0.9, 0.99), "max_epochs": 15, "batch_size": batch,
+            "betas": (0.9, 0.99), "max_epochs": 20, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
             "patience": 3, "min_delta": 0.005, "ckpt_every": 1000, "lr_finder": True,
-            "ema_decay": 0.95, "label_smoothing": 0.03,
+            "ema_decay": 0.95, "label_smoothing": 0.02,
             "schedule": "cosine", "stable_pct": 0.80, "decay_pct": 0.18,
             "gradient_checkpointing": False,
             "optimizer": "muon", "muon_momentum": 0.95,
@@ -1117,11 +1134,14 @@ def make_training_configs(env):
             "use_progressive_resizing": True, "use_swa": True,
         },
         "interview": {
-            "lr": 1e-4, "warmup_ratio": 0.05, "weight_decay": 0.03,
-            "betas": (0.9, 0.99), "max_epochs": 15, "batch_size": batch,
+            # Higher LR than domain/instruction — warm-starting from a well-trained
+            # checkpoint so we can learn faster without instability.
+            "lr": 2e-4, "warmup_ratio": 0.03, "weight_decay": 0.03,
+            "betas": (0.9, 0.99), "max_epochs": 25, "batch_size": batch,
             "grad_clip": 1.0, "max_len": 1024, "grad_accum_steps": accum,
-            "patience": 3, "min_delta": 0.005, "ckpt_every": 1000, "lr_finder": True,
-            "ema_decay": 0.95, "label_smoothing": 0.03,
+            # patience=4: give the interview stage enough time to converge
+            "patience": 4, "min_delta": 0.003, "ckpt_every": 500, "lr_finder": True,
+            "ema_decay": 0.999, "label_smoothing": 0.01,  # low LS for sharp Q&A
             "schedule": "cosine", "stable_pct": 0.70, "decay_pct": 0.25,
             "gradient_checkpointing": True,
             "optimizer": "muon", "muon_momentum": 0.95,

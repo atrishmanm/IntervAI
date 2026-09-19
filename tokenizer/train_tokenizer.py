@@ -300,6 +300,19 @@ def main():
     print("\n[1/3] Building corpus from all datasets...")
     build_corpus_file(corpus_path)
 
+    # SAFETY: abort if corpus is empty — this would produce a 267-token
+    # char-level tokenizer that makes all downstream training useless.
+    with open(corpus_path, "r", encoding="utf-8") as f:
+        line_count = sum(1 for _ in f)
+    if line_count == 0:
+        print("\n  !! ERROR: Corpus file is EMPTY (0 lines).")
+        print("  !! This means no data files were found in data/raw/.")
+        print("  !! On Kaggle, ensure the dataset is copied BEFORE tokenizer training.")
+        print("  !! Fix: run copy_dataset_into_raw() first, or check data paths.")
+        import sys
+        sys.exit(1)
+    print(f"  Corpus has {line_count:,} lines — proceeding with BPE training.")
+
     print("\n[2/3] Training BPE tokenizer...")
     tok = train(corpus_path)
 

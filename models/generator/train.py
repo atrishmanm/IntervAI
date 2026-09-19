@@ -181,14 +181,14 @@ def resolve_data_path(rel: str):
 
 # Maximum unique examples per curriculum stage to guarantee completion within 8 hours on 2x T4
 STAGE_MAX_EXAMPLES = {
-    "pretrain": 50_000,
-    "domain": 30_000,
-    "instruction": 25_000,
-    "interview": 30_000,
-    "evaluator": 15_000,
-    "followup": 15_000,
-    "resume_finetune": 15_000,
-    "negotiation": 15_000,
+    "pretrain":       50_000,   # language model foundation
+    "domain":         40_000,   # code-domain knowledge (was 30K)
+    "instruction":    35_000,   # instruction following (was 25K)
+    "interview":      60_000,   # core interview SFT — highest priority (was 30K)
+    "evaluator":      15_000,
+    "followup":       20_000,   # (was 15K)
+    "resume_finetune":20_000,   # (was 15K)
+    "negotiation":    15_000,
 }
 
 
@@ -230,19 +230,27 @@ def build_dataset_for_stage(stage, tokenizer, config):
             print(f"  [Sample Budget] Capping {stage} dataset to {cap:,} examples for optimal <8h convergence")
             uniq = uniq[:cap]
 
-    # Build a wrapper dataset from the raw message lists
+    # Build a wrapper dataset from the raw message lists.
+    # Uses assistant-token-only loss masking: labels=-100 for all system/user
+    # tokens so the model ONLY trains on predicting assistant outputs.
+    # This concentrates training signal and dramatically increases tok_acc.
     class _Wrapper(torch.utils.data.Dataset):
         def __init__(self, msgs, tokenizer, max_len):
             self.msgs = msgs
             self.tokenizer = tokenizer
             self.max_len = max_len
-            # Get pad id once
             self.pad_id = self.tokenizer.token_to_id("[PAD]") or 0
+            # Pre-encode the role marker tokens for fast lookup
+            # "<|assistant|>" marks where we START collecting real labels
+            # "<|end|>" marks where we STOP collecting real labels
+            self._asst_ids = set(self.tokenizer.encode("<|assistant|>").ids)
+            self._end_ids  = set(self.tokenizer.encode("<|end|>").ids)
 
         def __len__(self):
             return len(self.msgs)
 
         def __getitem__(self, i):
+            # Build full text with role markers
             parts = []
             for msg in self.msgs[i]:
                 role = msg.get("role", "user")
@@ -251,9 +259,33 @@ def build_dataset_for_stage(stage, tokenizer, config):
             full = "\n".join(parts)
             enc = self.tokenizer.encode(full)
             ids = enc.ids[:self.max_len]
-            # Return raw lists — pad_collate will pad to batch-max at load time.
-            # This avoids the "each element should be of equal size" crash.
-            return {"input_ids": ids, "labels": ids[:]}
+
+            # Build labels: -100 everywhere except inside assistant turns.
+            # We walk token by token tracking whether we are "inside" an
+            # assistant segment (between <|assistant|> ... <|end|>).
+            labels = []
+            in_assistant = False
+            for tid in ids:
+                if tid in self._asst_ids:
+                    # The marker token itself gets -100 (we don't predict it)
+                    in_assistant = True
+                    labels.append(-100)
+                elif in_assistant and tid in self._end_ids:
+                    # End token also gets -100; stop assistant segment
+                    labels.append(-100)
+                    in_assistant = False
+                elif in_assistant:
+                    labels.append(tid)
+                else:
+                    labels.append(-100)
+
+            # Fallback: if no assistant segment found (e.g. code-only records),
+            # use all tokens as labels so we don't lose pretrain signal.
+            if all(l == -100 for l in labels):
+                labels = ids[:]
+
+            # Return raw lists — pad_collate pads to batch-max at load time.
+            return {"input_ids": ids, "labels": labels}
 
     full = _Wrapper(uniq, tokenizer, max_len)
     val_size = min(500, max(1, len(full) // 30))

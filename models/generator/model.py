@@ -320,22 +320,33 @@ class InterviewGenerator(nn.Module):
 
             ls = label_smoothing if label_smoothing is not None else self.config.label_smoothing
 
+            # Use ignore_index=-100 (PyTorch standard). The dataset sets labels=-100
+            # for padding AND for non-assistant tokens (user/system) so the model
+            # only learns to predict assistant outputs, dramatically increasing tok_acc.
+            IGNORE = -100
+
             if ls > 0:
                 vocab_size = shift_logits.size(-1)
+                flat_labels = shift_labels.view(-1)
+                # Build mask: positions we actually train on (not -100, not pad)
+                mask = ((flat_labels != IGNORE) & (flat_labels != self.pad_id)).float()
+                n_active = mask.sum().clamp(min=1)
                 log_probs = F.log_softmax(shift_logits.view(-1, vocab_size), dim=-1)
+                # Replace -100 with 0 for indexing (will be masked out anyway)
+                safe_labels = flat_labels.clone()
+                safe_labels[flat_labels == IGNORE] = 0
                 nll_loss = F.nll_loss(
-                    log_probs, shift_labels.view(-1),
-                    ignore_index=self.pad_id, reduction="mean",
+                    log_probs, safe_labels,
+                    ignore_index=self.pad_id, reduction="none",
                 )
-                smooth_loss = -log_probs.mean(dim=-1)
-                mask = (shift_labels.view(-1) != self.pad_id).float()
-                smooth_loss = (smooth_loss * mask).sum() / mask.sum()
+                nll_loss = (nll_loss * mask).sum() / n_active
+                smooth_loss = (-log_probs.mean(dim=-1) * mask).sum() / n_active
                 loss = (1.0 - ls) * nll_loss + ls * smooth_loss
             else:
                 loss = F.cross_entropy(
                     shift_logits.view(-1, shift_logits.size(-1)),
                     shift_labels.view(-1),
-                    ignore_index=self.pad_id,
+                    ignore_index=IGNORE,
                 )
             result["loss"] = loss
 

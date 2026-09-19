@@ -66,15 +66,16 @@ ALL_STAGES = [
 STAGE_NAMES = ALL_STAGES
 
 # Stage-specific budget allocation (proportional to data volume and task importance)
+# Interview gets the most fine-tuning time — it's the stage that drives tok_acc to 80%+.
 STAGE_BUDGET_WEIGHTS = {
-    "pretrain": 0.35,        # ~168 min (largest dataset)
-    "domain": 0.15,          # ~72 min
-    "instruction": 0.12,     # ~58 min
-    "interview": 0.18,       # ~86 min (crucial for interview dialog)
-    "evaluator": 0.08,       # ~38 min
-    "followup": 0.04,        # ~20 min
-    "resume_finetune": 0.04, # ~20 min
-    "negotiation": 0.04,     # ~20 min
+    "pretrain":        0.28,   # ~134 min (foundation LM pretraining)
+    "domain":          0.12,   # ~58  min (code domain adaptation)
+    "instruction":     0.10,   # ~48  min (instruction following)
+    "interview":       0.25,   # ~120 min (core interview SFT — main target)
+    "evaluator":       0.08,   # ~38  min
+    "followup":        0.07,   # ~34  min (was 0.04)
+    "resume_finetune": 0.05,   # ~24  min (was 0.04)
+    "negotiation":     0.05,   # ~24  min (was 0.04)
 }
 
 def get_stage_time_limit_minutes(stage_idx: int, total_budget_minutes: float = 480.0) -> float:
@@ -110,7 +111,7 @@ def parse_args():
         "resume": False,
         "time_budget": 480,
         "limit": None,
-        "ml_epochs": 30,
+        "ml_epochs": 50,   # more epochs — classifier needs time to reach 80%+
     }
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg == "--stage" and i < len(sys.argv) - 1:
@@ -993,16 +994,62 @@ def main():
     raw_dir.mkdir(parents=True, exist_ok=True)
     copy_dataset_into_raw(raw_dir)
 
-    # ── 5. Train tokenizer (if not present) ───────────────────────
+    # ── 5. Fresh start: purge stale tokenizer and checkpoints ──────
+    # The pretrain run produced a 267-token char-level tokenizer (empty corpus
+    # because data hadn't been copied yet). Detect that and nuke it so we retrain
+    # with the full 16K BPE vocabulary.
     tok_path = ROOT / "tokenizer" / "saved" / "tokenizer.json"
+    stale_tokenizer = False
+    if tok_path.exists():
+        try:
+            from tokenizers import Tokenizer as _T
+            _tok = _T.from_file(str(tok_path))
+            if _tok.get_vocab_size() < 1000:
+                print(f"\n  [FRESH START] Stale tokenizer detected (vocab={_tok.get_vocab_size()}, need 16K).")
+                print("  Deleting stale tokenizer.json so it is rebuilt from the full dataset.")
+                tok_path.unlink()
+                stale_tokenizer = True
+        except Exception as _e:
+            print(f"  [WARN] Could not read tokenizer for stale-check: {_e}")
+
+    # Also delete all .pt checkpoints trained with the stale 267-token tokenizer.
+    # They are incompatible with the new 16K vocab (embedding size mismatch).
+    ckpt_dir = SAVE_ROOT
+    if stale_tokenizer and ckpt_dir.exists():
+        stale_pts = list(ckpt_dir.glob("*.pt")) + list(ckpt_dir.glob("*.pt.resume"))
+        if stale_pts:
+            print(f"  [FRESH START] Deleting {len(stale_pts)} stale checkpoint(s) (wrong vocab):")
+            for p in stale_pts:
+                try:
+                    p.unlink()
+                    print(f"    - {p.name}")
+                except Exception as _e:
+                    print(f"    ! could not delete {p.name}: {_e}")
+        progress_file = ckpt_dir / "training_progress.json"
+        if progress_file.exists():
+            progress_file.unlink()
+            print("  [FRESH START] Deleted training_progress.json (stale checkpoint state).")
+
+    # ── 6. Train tokenizer (AFTER dataset copy, so corpus is populated) ──
+    # CRITICAL ORDER: tokenizer MUST come after copy_dataset_into_raw() so that
+    # data/raw/*.jsonl files exist when train_tokenizer.py scans them.
     if not tok_path.exists():
-        print("\nTraining tokenizer on Kaggle data (16K vocab)...")
+        print("\nTraining tokenizer on Kaggle data (target 16K BPE vocab)...")
         rc = _py("tokenizer/train_tokenizer.py")
         if rc != 0:
             print("!! Tokenizer training failed — stopping.")
             sys.exit(rc)
+        # Verify the vocab is correct
+        try:
+            from tokenizers import Tokenizer as _T2
+            _tok2 = _T2.from_file(str(tok_path))
+            print(f"  Tokenizer trained: vocab={_tok2.get_vocab_size():,}")
+            if _tok2.get_vocab_size() < 1000:
+                print("!! WARNING: tokenizer vocab still small — check that data files were copied correctly.")
+        except Exception as _e2:
+            print(f"  [WARN] Tokenizer verify failed: {_e2}")
     else:
-        print("\nTokenizer already present, skipping training.")
+        print("\nTokenizer already present (valid vocab), skipping training.")
 
     # ── 6. SECTION 3 — classification + regression ────────────────
     if part in ("all", "ml"):
