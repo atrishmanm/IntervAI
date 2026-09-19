@@ -1,0 +1,12 @@
+{
+  "id": "atrishmanmukherjee/intervai-v3",
+  "title": "IntervAI_v3",
+  "code_file": "intervai-v3.py",
+  "language": "python",
+  "kernel_type": "script",
+  "kernel_sources": [],
+  "dataset_sources": ["atrishmanmukherjee/intervai-data"],
+  "enable_gpu": "true",
+  "enable_internet": "true",
+  "machine_shape": "gpu-basic"
+}

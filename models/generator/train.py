@@ -647,14 +647,8 @@ def run_stage(stage, config, time_budget=None):
         #   3. val_loss WORSE and train_loss improved → overfitting → stop
         #   4. Soft time budget reached → stop after saving
 
-        if best_val_loss == float("inf"):
-            improved = True
-        else:
-            improved = val_loss < best_val_loss - (best_val_loss * min_delta)
-        improving = val_loss < prev_val_loss
-        prev_val_loss = val_loss
-
-        if improved:
+        # First epoch or genuine improvement → save checkpoint
+        if best_val_loss == float("inf") or val_loss < best_val_loss - (best_val_loss * min_delta):
             best_val_loss = val_loss
             best_epoch = epoch
             patience_left = plateau_patience
@@ -663,12 +657,15 @@ def run_stage(stage, config, time_budget=None):
                             extra={"stage": stage, "best_val_loss": best_val_loss,
                                    "val_loss": val_loss, "epoch": epoch},
                             scaler=scaler)
-            print(f"  [best] val_loss={val_loss:.4f} (improved, patience reset to {plateau_patience})")
+            print(f"  [best] val_loss={val_loss:.4f} (saved, patience reset to {plateau_patience})")
         else:
             patience_left -= 1
             pct_improve = ((best_val_loss - val_loss) / best_val_loss * 100) if best_val_loss > 0 else 0
             print(f"  [plateau] val_loss={val_loss:.4f} (best={best_val_loss:.4f}, "
                   f"{pct_improve:+.1f}% from best, patience {patience_left}/{plateau_patience})")
+
+        improving = val_loss < prev_val_loss
+        prev_val_loss = val_loss
 
         # Overfitting detection: val_loss increasing while train_loss keeps decreasing
         overfitting = (not improving and len(val_loss_history) >= 3
