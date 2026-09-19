@@ -52,6 +52,24 @@ if "best_val_loss == float(\"inf\")" not in content:
     sys.exit(1)
 print("Checkpoint fix verified: first-epoch save is present")
 
+# ── 3b. Train tokenizer if not present ────────────────────────
+tok_path = os.path.join(REPO, "tokenizer", "saved", "tokenizer.json")
+if not os.path.exists(tok_path):
+    print("\nTraining tokenizer (16K vocab, ByteLevel BPE)...")
+    ret = subprocess.run(
+        [sys.executable, os.path.join("tokenizer", "train_tokenizer.py")],
+        cwd=REPO,
+    )
+    if ret.returncode != 0:
+        print("FATAL: Tokenizer training failed!")
+        sys.exit(1)
+    if not os.path.exists(tok_path):
+        print(f"FATAL: Tokenizer not found at {tok_path} after training!")
+        sys.exit(1)
+    print(f"Tokenizer trained and saved: {tok_path}")
+else:
+    print(f"Tokenizer already present: {tok_path}")
+
 # ── 4. Run STAGED training with verification ──────────────────
 STAGES = [
     ("pretrain", 168),      # ~168 min (35% of 480)
