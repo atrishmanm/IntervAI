@@ -360,9 +360,11 @@ class InterviewGenerator(nn.Module):
         temperature: float = 0.7,
         top_p: float = 0.9,
         top_k: int = 50,
+        repetition_penalty: float = 1.25,
+        no_repeat_ngram_size: int = 3,
         eos_token_id: int = None,
     ) -> torch.Tensor:
-        """Generate text autoregressively with per-sequence EOS tracking."""
+        """Generate text autoregressively with per-sequence EOS tracking, repetition penalty, and n-gram blocking."""
         self.eval()
         generated = prompt_ids.clone()
         B = generated.size(0)
@@ -371,14 +373,39 @@ class InterviewGenerator(nn.Module):
         for _ in range(max_new_tokens):
             input_ids = generated[:, -self.config.max_len:]
             result = self.forward(input_ids)
-            logits = result["logits"][:, -1, :]
-            logits = logits / temperature
+            logits = result["logits"][:, -1, :].clone()
 
+            # 1. Repetition penalty (penalize previously generated tokens)
+            if repetition_penalty != 1.0:
+                for b in range(B):
+                    prev_tokens = set(generated[b].tolist())
+                    for tok in prev_tokens:
+                        if logits[b, tok] > 0:
+                            logits[b, tok] /= repetition_penalty
+                        else:
+                            logits[b, tok] *= repetition_penalty
+
+            # 2. No-repeat n-gram blocking (prevent repetitive phrase loops)
+            if no_repeat_ngram_size > 0 and generated.size(1) >= no_repeat_ngram_size:
+                for b in range(B):
+                    seq = generated[b].tolist()
+                    prefix = tuple(seq[-(no_repeat_ngram_size - 1):])
+                    for i in range(len(seq) - no_repeat_ngram_size + 1):
+                        if tuple(seq[i:i + no_repeat_ngram_size - 1]) == prefix:
+                            banned_tok = seq[i + no_repeat_ngram_size - 1]
+                            logits[b, banned_tok] = float("-inf")
+
+            # 3. Temperature scaling
+            if temperature > 0.0:
+                logits = logits / temperature
+
+            # 4. Top-k filtering
             if top_k > 0:
-                top_k_vals, _ = torch.topk(logits, top_k)
+                top_k_vals, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 threshold = top_k_vals[:, -1, None]
                 logits = logits.masked_fill(logits < threshold, float("-inf"))
 
+            # 5. Top-p (nucleus) filtering
             if top_p < 1.0:
                 sorted_logits, sorted_indices = torch.sort(logits, descending=True)
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
@@ -388,14 +415,18 @@ class InterviewGenerator(nn.Module):
                 mask = torch.zeros_like(logits).scatter(1, sorted_indices, sorted_mask.float())
                 logits = logits.masked_fill(mask.bool(), float("-inf"))
 
-            # temperature=0 means greedy (argmax), otherwise multinomial sampling
+            # 6. Sample or greedy argmax
             if temperature <= 0.0:
                 next_token = logits.argmax(dim=-1, keepdim=True)
             else:
                 probs = F.softmax(logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-            next_token[finished] = self.pad_id
+                # Guard against any all-inf numerical issues
+                if torch.isnan(probs).any() or (probs.sum(dim=-1) == 0).any():
+                    next_token = logits.argmax(dim=-1, keepdim=True)
+                else:
+                    next_token = torch.multinomial(probs, num_samples=1)
 
+            next_token[finished] = self.pad_id
             generated = torch.cat([generated, next_token], dim=1)
 
             if eos_token_id is not None:

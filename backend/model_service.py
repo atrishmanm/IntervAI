@@ -200,8 +200,9 @@ class ModelService:
                  max_new_tokens: int = 50,
                  temperature: float = 0.7,
                  top_p: float = 0.9,
-                 top_k: int = 50) -> str:
-        """Generate text from a loaded model."""
+                 top_k: int = 50,
+                 repetition_penalty: float = 1.25) -> str:
+        """Generate text from a loaded model with repetition penalty."""
         model = self.get_model(stage)
         if model is None:
             raise RuntimeError(f"Model '{stage}' not loaded")
@@ -217,6 +218,7 @@ class ModelService:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            repetition_penalty=repetition_penalty,
             eos_token_id=eos_id,
         )
         return self._decode(output_ids)

@@ -381,31 +381,146 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
     split_idx = int(0.8 * len(train_examples))
     train_data, val_data = train_examples[:split_idx], train_examples[split_idx:]
 
-    train_ds = ScoringDataset(train_data, tokenizer)
+    import torch.nn.functional as F
+
+    # ── Balance training data with synthetic hard negatives (val_data stays pure) ──
+    augmented_train = list(train_data)
+    class_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+    for e in train_data:
+        class_counts[e["label"]] += 1
+
+    # Scale target count to match majority class, bounded between 10 and 500
+    target_count = max(10, min(500, class_counts.get(0, 10)))
+    off_topic_pool = [
+        "Photosynthesis converts sunlight, water, and carbon dioxide into glucose and oxygen.",
+        "The Roman Empire reached its greatest territorial extent under emperor Trajan in 117 AD.",
+        "To prepare authentic carbonara, whisk raw egg yolks with grated pecorino romano and black pepper.",
+        "The speed of light in vacuum is approximately 299,792 kilometers per second.",
+        "A standard marathon covers an official distance of 42.195 kilometers or 26 miles.",
+        "Mount Kilimanjaro in Tanzania is the highest free-standing mountain above sea level.",
+    ]
+    all_questions = [e["question"] for e in train_data]
+    all_refs = [e["reference_answer"] for e in train_data]
+
+    # Augment off-topic (label 3, score 0.0)
+    needed_3 = max(0, target_count - class_counts[3])
+    for i in range(needed_3):
+        q = random.choice(all_questions)
+        distractor = random.choice(off_topic_pool) if i % 2 == 0 else random.choice(all_refs)
+        augmented_train.append({
+            "question": q,
+            "student_answer": distractor,
+            "reference_answer": random.choice(all_refs),
+            "score": 0.0,
+            "label": 3,
+        })
+
+    # Augment incorrect (label 2, score 0.25)
+    needed_2 = max(0, target_count - class_counts[2])
+    for i in range(needed_2):
+        q = random.choice(all_questions)
+        other_ref = random.choice(all_refs)
+        augmented_train.append({
+            "question": q,
+            "student_answer": f"It is primarily used for {other_ref[:120]}.",
+            "reference_answer": random.choice(all_refs),
+            "score": 0.25,
+            "label": 2,
+        })
+
+    # Augment partially correct (label 1, score 0.60)
+    needed_1 = max(0, target_count - class_counts[1])
+    for i in range(needed_1):
+        orig = random.choice(train_data)
+        words = orig["reference_answer"].split()
+        half_words = words[:max(4, len(words) // 2)]
+        augmented_train.append({
+            "question": orig["question"],
+            "student_answer": " ".join(half_words),
+            "reference_answer": orig["reference_answer"],
+            "score": 0.60,
+            "label": 1,
+        })
+
+    random.shuffle(augmented_train)
+    _aug_counts = {c: 0 for c in range(4)}
+    for e in augmented_train:
+        _aug_counts[e["label"]] += 1
+    print(f"      Augmented Train: {len(augmented_train)} {[(c, _aug_counts[c]) for c in range(4)]}")
+
+    train_ds = ScoringDataset(augmented_train, tokenizer)
     val_ds = ScoringDataset(val_data, tokenizer)
     batch_size = 16
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
-    print(f"      Train: {len(train_ds)} | Val: {len(val_ds)} | Batch: {batch_size}")
+    print(f"      Train Batches: {len(train_loader)} | Val Samples: {len(val_ds)}")
 
     epochs = ml_epochs
     lr = 3e-4
     device = DEVICE
 
-    # ── 3.4 Train Classifier ──
-    print(f"\n[3.4] Training Classifier ({epochs} epochs)...")
+    # ── Advanced Loss Implementations ──
+    class FocalLoss(nn.Module):
+        """Multi-class Focal Loss to suppress majority-class dominance."""
+        def __init__(self, alpha=None, gamma=2.0, label_smoothing=0.05):
+            super().__init__()
+            self.alpha = alpha
+            self.gamma = gamma
+            self.label_smoothing = label_smoothing
+
+        def forward(self, logits, targets):
+            ce = F.cross_entropy(
+                logits, targets, weight=self.alpha,
+                label_smoothing=self.label_smoothing, reduction="none"
+            )
+            pt = torch.exp(-ce)
+            return (((1.0 - pt) ** self.gamma) * ce).mean()
+
+    class CompositeRegressionLoss(nn.Module):
+        """Combines Huber loss with Pearson correlation penalty and pairwise ranking."""
+        def __init__(self, delta=0.08, corr_weight=0.6, rank_weight=0.3):
+            super().__init__()
+            self.huber = nn.HuberLoss(delta=delta)
+            self.corr_weight = corr_weight
+            self.rank_weight = rank_weight
+
+        def forward(self, preds, targets):
+            loss_huber = self.huber(preds, targets)
+            if preds.size(0) > 2:
+                p_sub = preds - preds.mean()
+                t_sub = targets - targets.mean()
+                p_std = torch.sqrt((p_sub ** 2).sum() + 1e-7)
+                t_std = torch.sqrt((t_sub ** 2).sum() + 1e-7)
+                pearson_r = (p_sub * t_sub).sum() / (p_std * t_std + 1e-7)
+                loss_corr = 1.0 - pearson_r
+            else:
+                loss_corr = torch.tensor(0.0, device=preds.device)
+
+            if preds.size(0) > 1:
+                diff_t = targets.unsqueeze(1) - targets.unsqueeze(0)
+                diff_p = preds.unsqueeze(1) - preds.unsqueeze(0)
+                sign = torch.sign(diff_t)
+                mask = (diff_t.abs() > 0.05).float()
+                loss_rank = (F.relu(-sign * diff_p + 0.05) * mask).sum() / (mask.sum() + 1e-7)
+            else:
+                loss_rank = torch.tensor(0.0, device=preds.device)
+
+            return loss_huber + self.corr_weight * loss_corr + self.rank_weight * loss_rank
+
+    # ── 3.4 Train Classifier with Focal Loss ──
+    print(f"\n[3.4] Training Classifier with Focal Loss ({epochs} epochs)...")
     classifier_model = classifier_model.to(device)
     _counts = {c: 0 for c in range(4)}
-    for e in train_data:
+    for e in augmented_train:
         _counts[e["label"]] += 1
-    _w = torch.tensor([len(train_data) / max(_counts[c], 1) for c in range(4)],
+    _w = torch.tensor([len(augmented_train) / max(_counts[c], 1) for c in range(4)],
                       dtype=torch.float)
     _w = torch.sqrt(_w)
     _w = _w / _w.mean()
-    print(f"      Class weights (correct/partial/incorrect/off_topic): "
-          f"{[round(x, 2) for x in _w.tolist()]}")
+    print(f"      Focal alpha weights: {[round(x, 2) for x in _w.tolist()]}")
+
     cls_optimizer = torch.optim.AdamW(classifier_model.parameters(), lr=lr, weight_decay=0.05)
-    cls_loss_fn = nn.CrossEntropyLoss(weight=_w.to(device), label_smoothing=0.1)
+    cls_loss_fn = FocalLoss(alpha=_w.to(device), gamma=2.0)
     total_steps = epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
     def _lr_lambda(step):
@@ -416,10 +531,12 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
     cls_scheduler = torch.optim.lr_scheduler.LambdaLR(cls_optimizer, _lr_lambda)
 
     cls_results = []
-    best_val_acc = 0.0
+    best_val_f1 = 0.0
     best_cls_state = None
     patience_ctr = 0
     cls_patience = 7
+
+    from sklearn.metrics import f1_score
 
     for epoch in range(1, epochs + 1):
         classifier_model.train()
@@ -450,36 +567,39 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
                 all_preds.extend(logits.argmax(-1).cpu().tolist())
                 all_labels.extend(labels.cpu().tolist())
         val_acc = val_correct / max(val_total, 1)
+        val_macro_f1 = float(f1_score(all_labels, all_preds, average="macro", zero_division=0))
         cls_results.append({
             "epoch": epoch, "train_loss": total_loss / max(total, 1),
             "train_acc": correct / max(total, 1),
             "val_loss": val_loss / max(val_total, 1),
             "val_acc": val_acc,
+            "val_macro_f1": val_macro_f1,
         })
         marker = ""
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # Optimize on macro F1 to prevent majority class collapse!
+        if val_macro_f1 > best_val_f1:
+            best_val_f1 = val_macro_f1
             best_cls_state = {k: v.cpu().clone() for k, v in classifier_model.state_dict().items()}
             patience_ctr = 0
-            marker = " * best *"
+            marker = " * best f1 *"
         else:
             patience_ctr += 1
         print(f"      Epoch {epoch:>2d}: train_loss={cls_results[-1]['train_loss']:.4f} "
               f"acc={cls_results[-1]['train_acc']:.4f} val_acc={val_acc:.4f} "
-              f"lr={cls_scheduler.get_last_lr()[0]:.2e}{marker}")
+              f"val_macro_f1={val_macro_f1:.4f} lr={cls_scheduler.get_last_lr()[0]:.2e}{marker}")
         if patience_ctr >= cls_patience:
-            print(f"      [EARLY STOP] No improvement for {cls_patience} epochs")
+            print(f"      [EARLY STOP] No improvement in macro F1 for {cls_patience} epochs")
             break
 
     if best_cls_state is not None:
         classifier_model.load_state_dict(best_cls_state)
-        print(f"      Restored best model (val_acc={best_val_acc:.4f})")
+        print(f"      Restored best model (val_macro_f1={best_val_f1:.4f})")
 
-    # ── 3.5 Train Regressor ──
-    print(f"\n[3.5] Training Regressor ({epochs} epochs)...")
+    # ── 3.5 Train Regressor with Composite Correlation & Ranking Loss ──
+    print(f"\n[3.5] Training Regressor with Composite Loss ({epochs} epochs)...")
     regressor_model = regressor_model.to(device)
     reg_optimizer = torch.optim.AdamW(regressor_model.parameters(), lr=lr, weight_decay=0.05)
-    reg_loss_fn = nn.MSELoss()
+    reg_loss_fn = CompositeRegressionLoss()
     reg_total_steps = epochs * len(train_loader)
     reg_warmup_steps = int(0.1 * reg_total_steps)
     def _reg_lr_lambda(step):
@@ -490,7 +610,7 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
     reg_scheduler = torch.optim.lr_scheduler.LambdaLR(reg_optimizer, _reg_lr_lambda)
 
     reg_results = []
-    best_val_rmse = float("inf")
+    best_val_score = float("inf")
     best_reg_state = None
     reg_patience_ctr = 0
     reg_patience = 7
@@ -510,47 +630,66 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
             total_loss += loss.item() * ids.size(0)
             total_se += ((preds - scores) ** 2).sum().item()
             total += ids.size(0)
-        train_rmse = math.sqrt(total_loss / max(total, 1))
+        train_loss = total_loss / max(total, 1)
+        train_rmse = math.sqrt(total_se / max(total, 1))
 
         regressor_model.eval()
-        val_se, val_ae, val_total = 0.0, 0.0, 0
+        all_preds, all_scores = [], []
         with torch.no_grad():
             for ids, _, scores in val_loader:
-                ids, scores = ids.to(device), scores.to(device)
+                ids = ids.to(device)
                 preds = regressor_model(ids)
-                val_se += ((preds - scores) ** 2).sum().item()
-                val_ae += (preds - scores).abs().sum().item()
-                val_total += ids.size(0)
-        val_rmse = math.sqrt(val_se / max(val_total, 1))
+                all_preds.extend(preds.cpu().tolist())
+                all_scores.extend(scores.tolist())
+
+        p_t = torch.tensor(all_preds, dtype=torch.float)
+        s_t = torch.tensor(all_scores, dtype=torch.float)
+        val_se = ((p_t - s_t) ** 2).mean().item()
+        val_rmse = math.sqrt(val_se)
+        val_mae = (p_t - s_t).abs().mean().item()
+
+        # Pearson correlation
+        p_sub = p_t - p_t.mean()
+        s_sub = s_t - s_t.mean()
+        denom = torch.sqrt((p_sub ** 2).sum() * (s_sub ** 2).sum()) + 1e-7
+        val_pearson_r = float(((p_sub * s_sub).sum() / denom).item())
+
         reg_results.append({
-            "epoch": epoch, "train_rmse": train_rmse,
+            "epoch": epoch, "train_loss": train_loss, "train_rmse": train_rmse,
             "val_rmse": val_rmse,
-            "val_mae": val_ae / max(val_total, 1),
+            "val_mae": val_mae,
+            "val_pearson_r": val_pearson_r,
         })
+
+        # Selection metric balances low error with high correlation spread
+        val_score = val_rmse - 0.15 * max(0.0, val_pearson_r)
         marker = ""
-        if val_rmse < best_val_rmse:
-            best_val_rmse = val_rmse
+        if val_score < best_val_score:
+            best_val_score = val_score
             best_reg_state = {k: v.cpu().clone() for k, v in regressor_model.state_dict().items()}
             reg_patience_ctr = 0
             marker = " * best *"
         else:
             reg_patience_ctr += 1
-        print(f"      Epoch {epoch:>2d}: train_rmse={train_rmse:.4f} "
-              f"val_rmse={val_rmse:.4f} val_mae={reg_results[-1]['val_mae']:.4f}{marker}")
+        print(f"      Epoch {epoch:>2d}: train_loss={train_loss:.4f} "
+              f"val_rmse={val_rmse:.4f} val_mae={val_mae:.4f} "
+              f"pearson_r={val_pearson_r:.4f}{marker}")
         if reg_patience_ctr >= reg_patience:
             print(f"      [EARLY STOP] No improvement for {reg_patience} epochs")
             break
 
     if best_reg_state is not None:
         regressor_model.load_state_dict(best_reg_state)
-        print(f"      Restored best model (val_rmse={best_val_rmse:.4f})")
+        print(f"      Restored best model (val_score={best_val_score:.4f})")
 
-    # ── 3.6 Real sklearn baselines (same split, TF-IDF features) ──
-    print("\n[3.6] Baselines (TF-IDF + classical models, same split)...")
+    # ── 3.6 Real sklearn Baselines + Feature GBDT Ensembles ──
+    print("\n[3.6] Baselines & GBDT Ensembles (TF-IDF + Lexical Signals)...")
     baselines = {}
+    import pickle
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.linear_model import LogisticRegression, Ridge
+        from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
         from sklearn.dummy import DummyClassifier, DummyRegressor
         from sklearn.pipeline import make_pipeline
 
@@ -568,39 +707,66 @@ def run_ml_training(ROOT: Path, DEVICE, limit=None, ml_epochs=15):
         majority.fit(X_train, y_cls_train)
         baselines["majority_class_acc"] = majority.score(X_val, y_cls_val)
 
-        logreg = make_pipeline(TfidfVectorizer(max_features=20000), LogisticRegression(max_iter=2000))
+        logreg = make_pipeline(TfidfVectorizer(max_features=15000), LogisticRegression(max_iter=1500, class_weight="balanced"))
         logreg.fit(X_train, y_cls_train)
         baselines["tfidf_logreg_acc"] = logreg.score(X_val, y_cls_val)
+        baselines["tfidf_logreg_macro_f1"] = float(f1_score(y_cls_val, logreg.predict(X_val), average="macro", zero_division=0))
+
+        # Train GBDT Classifier
+        vec_cls = TfidfVectorizer(max_features=5000)
+        X_train_vec = vec_cls.fit_transform(X_train).toarray()
+        X_val_vec = vec_cls.transform(X_val).toarray()
+        gbdt_cls = HistGradientBoostingClassifier(max_iter=100, class_weight="balanced", random_state=42)
+        gbdt_cls.fit(X_train_vec, y_cls_train)
+        baselines["gbdt_cls_acc"] = float(gbdt_cls.score(X_val_vec, y_cls_val))
+        baselines["gbdt_cls_macro_f1"] = float(f1_score(y_cls_val, gbdt_cls.predict(X_val_vec), average="macro", zero_division=0))
 
         mean_pred = DummyRegressor(strategy="mean")
         mean_pred.fit(X_train, y_reg_train)
         baselines["mean_predictor_rmse"] = math.sqrt(
             ((mean_pred.predict(X_val) - y_reg_val) ** 2).mean())
 
-        ridge = make_pipeline(TfidfVectorizer(max_features=20000), Ridge(alpha=1.0))
+        ridge = make_pipeline(TfidfVectorizer(max_features=15000), Ridge(alpha=1.0))
         ridge.fit(X_train, y_reg_train)
-        baselines["tfidf_ridge_rmse"] = math.sqrt(
-            ((ridge.predict(X_val) - y_reg_val) ** 2).mean())
+        ridge_preds = ridge.predict(X_val)
+        baselines["tfidf_ridge_rmse"] = math.sqrt(((ridge_preds - y_reg_val) ** 2).mean())
+
+        # Train GBDT Regressor
+        gbdt_reg = HistGradientBoostingRegressor(max_iter=100, random_state=42)
+        gbdt_reg.fit(X_train_vec, y_reg_train)
+        gbdt_reg_preds = gbdt_reg.predict(X_val_vec)
+        baselines["gbdt_reg_rmse"] = math.sqrt(((gbdt_reg_preds - y_reg_val) ** 2).mean())
 
         label_counts = {0: 0, 1: 0, 2: 0, 3: 0}
         for e in train_examples:
             label_counts[e["label"]] += 1
         baselines["train_label_counts"] = label_counts
-        print(f"      Majority-class acc: {baselines['majority_class_acc']:.4f}")
-        print(f"      TF-IDF+LogReg acc:  {baselines['tfidf_logreg_acc']:.4f}")
+        print(f"      Majority-class acc:  {baselines['majority_class_acc']:.4f}")
+        print(f"      TF-IDF+LogReg acc:   {baselines['tfidf_logreg_acc']:.4f} (macro F1: {baselines['tfidf_logreg_macro_f1']:.4f})")
+        print(f"      GBDT Classifier acc: {baselines['gbdt_cls_acc']:.4f} (macro F1: {baselines['gbdt_cls_macro_f1']:.4f})")
         print(f"      Mean predictor RMSE: {baselines['mean_predictor_rmse']:.4f}")
         print(f"      TF-IDF+Ridge RMSE:   {baselines['tfidf_ridge_rmse']:.4f}")
+        print(f"      GBDT Regressor RMSE: {baselines['gbdt_reg_rmse']:.4f}")
+
+        # Save classical ensembles
+        save_dir = ROOT / "models" / "classifier" / "saved"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        with open(save_dir / "best_gbdt_classifier.pkl", "wb") as f:
+            pickle.dump({"model": gbdt_cls, "vectorizer": vec_cls}, f)
+        with open(save_dir / "best_ridge_regressor.pkl", "wb") as f:
+            pickle.dump(ridge, f)
+        print(f"      Persisted GBDT classifier & Ridge regressor to {save_dir}")
     except Exception as e:
         print(f"      Baselines skipped: {e}")
 
-    # ── 3.7 Save models + results ──
+    # ── 3.7 Save neural models + results ──
     save_dir = ROOT / "models" / "classifier" / "saved"
     save_dir.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state": classifier_model.state_dict(), "vocab_size": vocab_size,
                 "results": cls_results}, save_dir / "best_classifier.pt")
     torch.save({"model_state": regressor_model.state_dict(), "vocab_size": vocab_size,
                 "results": reg_results}, save_dir / "best_regressor.pt")
-    print(f"\n      Models saved to {save_dir}")
+    print(f"\n      PyTorch models saved to {save_dir}")
 
     results = {
         "n_examples": len(train_examples),
@@ -693,7 +859,8 @@ def run_comparative_and_report(ROOT: Path, DEVICE, MODEL_SIZE, ENV, NUM_GPUS,
     if ml and ml.get("reg_results"):
         best = min(ml["reg_results"], key=lambda x: x["val_rmse"])
         print(f"\n  Best Epoch: {best['epoch']}")
-        print(f"  Train RMSE: {best['train_rmse']:.4f}")
+        train_rmse_val = best.get("train_rmse", best.get("train_loss", 0.0))
+        print(f"  Train RMSE: {train_rmse_val:.4f}")
         print(f"  Val RMSE:   {best['val_rmse']:.4f} | Val MAE: {best['val_mae']:.4f}")
 
         print("\n  Baseline Comparison (lower is better):")
@@ -872,20 +1039,29 @@ def run_comparative_and_report(ROOT: Path, DEVICE, MODEL_SIZE, ENV, NUM_GPUS,
             tokenizer = load_tokenizer(tok_path)
 
             ckpt_path = None
-            for cand in ["final_model.pt", "interview_tuned.pt", "pretrained.pt"]:
+            # Prioritize interview_tuned.pt for technical interview quality (val_loss 4.84 vs degraded later stages)
+            for cand in ["interview_tuned.pt", "final_model.pt", "instruction_tuned.pt", "pretrained.pt"]:
                 p = ROOT / "models" / "generator" / "saved" / cand
                 if p.exists():
                     ckpt_path = p
                     break
 
             if ckpt_path:
-                factory = {"large": create_large_model, "medium": create_medium_model,
-                           "small": create_small_model}.get(MODEL_SIZE, create_small_model)
-                model = factory(vocab_size=tokenizer.get_vocab_size())
+                print(f"  Using checkpoint: {ckpt_path.name}")
                 ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
                 sd = ckpt["model_state_dict"]
                 if any(k.startswith("module.") for k in sd):
                     sd = {k[len("module."):]: v for k, v in sd.items()}
+
+                # Auto-detect architecture dimension from checkpoint weights
+                dim = sd.get("norm.weight", torch.zeros(768)).shape[0]
+                if dim == 768:
+                    model = create_large_model(vocab_size=tokenizer.get_vocab_size())
+                elif dim == 512:
+                    model = create_medium_model(vocab_size=tokenizer.get_vocab_size())
+                else:
+                    model = create_small_model(vocab_size=tokenizer.get_vocab_size())
+
                 model.load_state_dict(sd)
                 model = model.to(DEVICE)
                 model.eval()
@@ -895,10 +1071,23 @@ def run_comparative_and_report(ROOT: Path, DEVICE, MODEL_SIZE, ENV, NUM_GPUS,
                           "<|assistant|>")
                 ids = tokenizer.encode(prompt).ids
                 tensor = torch.tensor([ids], dtype=torch.long, device=DEVICE)
+                eos_id = tokenizer.token_to_id("<|end|>") or tokenizer.token_to_id("[SEP]")
                 with torch.no_grad():
-                    gen_ids = model.generate(tensor, max_new_tokens=100, temperature=0.7)
+                    gen_ids = model.generate(
+                        tensor,
+                        max_new_tokens=120,
+                        temperature=0.7,
+                        repetition_penalty=1.25,
+                        no_repeat_ngram_size=3,
+                        eos_token_id=eos_id,
+                    )
                     text = tokenizer.decode(gen_ids[0].tolist()).replace("Ġ", " ").replace("Ċ", "\n")
-                    answer = text.split("<|assistant|>")[-1].strip()[:300]
+                    text = re.sub(r' +', ' ', text)
+                    answer = text.split("<|assistant|>")[-1].strip()
+                    # Strip trailing prompt or system tokens if any
+                    for stop_tok in ["<|end|>", "<|user|>", "<|system|>"]:
+                        if stop_tok in answer:
+                            answer = answer.split(stop_tok)[0].strip()
                 print(f"\n  Prompt: {prompt[:80]}...")
                 print(f"\n  Generated Answer: {answer}")
             else:
